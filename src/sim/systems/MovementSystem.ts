@@ -33,9 +33,24 @@ function add(a: Vec2, b: Vec2): Vec2 {
   return { x: a.x + b.x, y: a.y + b.y };
 }
 
+type FormationLine = "DEF" | "MID" | "FWD";
+
+interface FormationSlot {
+  line: FormationLine;
+  lane: number;
+  laneCount: number;
+}
+
 export class MovementSystem {
+  private formationAssignments: Record<TeamId, Record<string, FormationSlot>> = {
+    HOME: {},
+    AWAY: {},
+  };
+
   step(state: MatchState, dtMs: number) {
     const dt = dtMs / 1000;
+    this.formationAssignments.HOME = this.buildTeamFormationAssignments(state, "HOME");
+    this.formationAssignments.AWAY = this.buildTeamFormationAssignments(state, "AWAY");
 
     for (const p of Object.values(state.players)) {
       const desired = this.getDesiredPos(state, p.id, p.teamId, p.role);
@@ -106,27 +121,31 @@ export class MovementSystem {
 
   private offBallSupportAnchor(state: MatchState, playerId: string, team: TeamId, role: PlayerRole): Vec2 {
     const base = this.formationAnchor(state, playerId, team, role);
+    const line = this.getFormationLine(team, playerId, role);
     const ball = state.ball.pos;
     const advanceX = team === "HOME" ? 26 : -26;
     const pullTowardBallX = (ball.x - base.x) * 0.18;
     const pullTowardBallY = (ball.y - base.y) * 0.14;
-    return {
+    const desired = {
       x: clamp(base.x + advanceX + pullTowardBallX, PITCH_LEFT + 20, PITCH_RIGHT - 20),
       y: clamp(base.y + pullTowardBallY, PITCH_TOP + 20, PITCH_BOTTOM - 20),
     };
+    return this.clampToZone(base, desired, line);
   }
 
   private defensiveAnchor(state: MatchState, playerId: string, team: TeamId, role: PlayerRole): Vec2 {
     const base = this.formationAnchor(state, playerId, team, role);
+    const line = this.getFormationLine(team, playerId, role);
     const ball = state.ball.pos;
     const teamGoalX = team === "HOME" ? PITCH_LEFT + 10 : PITCH_RIGHT - 10;
     const compactX = (ball.x + teamGoalX) / 2;
     const xWeight = role === "DEF" ? 0.34 : role === "MID" ? 0.26 : 0.2;
     const yWeight = role === "DEF" ? 0.24 : role === "MID" ? 0.2 : 0.14;
-    return {
+    const desired = {
       x: clamp(base.x + (compactX - base.x) * xWeight, PITCH_LEFT + 20, PITCH_RIGHT - 20),
       y: clamp(base.y + (ball.y - base.y) * yWeight, PITCH_TOP + 20, PITCH_BOTTOM - 20),
     };
+    return this.clampToZone(base, desired, line);
   }
 
   private goalkeeperAnchor(state: MatchState, team: TeamId): Vec2 {
@@ -155,17 +174,20 @@ export class MovementSystem {
 
   private formationAnchor(state: MatchState, playerId: string, team: TeamId, role: PlayerRole): Vec2 {
     const ids = state.teams[team].playerIds;
-    const index = Math.max(0, ids.indexOf(playerId));
-    const laneY = PITCH_TOP + 20 + ((index + 1) * (PITCH_BOTTOM - PITCH_TOP - 40)) / (ids.length + 1);
+    const slot = this.formationAssignments[team][playerId];
+    const fallbackIndex = Math.max(0, ids.indexOf(playerId));
+    const laneCount = slot?.laneCount ?? ids.length;
+    const lane = slot?.lane ?? fallbackIndex;
+    const laneY = PITCH_TOP + 20 + ((lane + 1) * (PITCH_BOTTOM - PITCH_TOP - 40)) / (laneCount + 1);
 
-    const roleXHome: Record<PlayerRole, number> = {
-      GK: PITCH_LEFT + 50,
-      DEF: PITCH_LEFT + 220,
-      MID: PITCH_LEFT + 430,
-      FWD: PITCH_LEFT + 640,
+    const line: FormationLine = slot?.line ?? (role === "DEF" ? "DEF" : role === "MID" ? "MID" : "FWD");
+    const roleXHome: Record<FormationLine, number> = {
+      DEF: PITCH_LEFT + 250,
+      MID: PITCH_LEFT + 470,
+      FWD: PITCH_LEFT + 670,
     };
 
-    const homeBase = roleXHome[role];
+    const homeBase = role === "GK" ? PITCH_LEFT + 50 : roleXHome[line];
     const baseX = team === "HOME" ? homeBase : PITCH_CENTER_X + (PITCH_CENTER_X - homeBase);
     const tactical = state.teams[team].tactical;
     const attacking = state.possession.team === team;
@@ -173,5 +195,65 @@ export class MovementSystem {
     const xShift = team === "HOME" ? pressureShift : -pressureShift;
 
     return { x: baseX + xShift, y: laneY };
+  }
+
+  private getFormationLine(team: TeamId, playerId: string, role: PlayerRole): FormationLine {
+    const slot = this.formationAssignments[team][playerId];
+    if (slot) return slot.line;
+    return role === "DEF" ? "DEF" : role === "MID" ? "MID" : "FWD";
+  }
+
+  private clampToZone(anchor: Vec2, desired: Vec2, line: FormationLine): Vec2 {
+    const zone = this.zoneRadiusForLine(line);
+    return {
+      x: clamp(desired.x, anchor.x - zone.x, anchor.x + zone.x),
+      y: clamp(desired.y, anchor.y - zone.y, anchor.y + zone.y),
+    };
+  }
+
+  private zoneRadiusForLine(line: FormationLine): Vec2 {
+    if (line === "DEF") return { x: 80, y: 105 };
+    if (line === "MID") return { x: 110, y: 120 };
+    return { x: 130, y: 130 };
+  }
+
+  private buildTeamFormationAssignments(state: MatchState, team: TeamId): Record<string, FormationSlot> {
+    const out: Record<string, FormationSlot> = {};
+    const outfieldIds = state.teams[team].playerIds.filter((id) => state.players[id].role !== "GK");
+    const available = [...outfieldIds];
+
+    const takeByPriority = (count: number, priorities: PlayerRole[]) => {
+      const picked: string[] = [];
+      for (const role of priorities) {
+        for (let i = 0; i < available.length && picked.length < count; i++) {
+          const id = available[i];
+          if (state.players[id].role !== role) continue;
+          picked.push(id);
+        }
+      }
+      for (const id of picked) {
+        const idx = available.indexOf(id);
+        if (idx >= 0) available.splice(idx, 1);
+      }
+      return picked.slice(0, count);
+    };
+
+    const defenders = takeByPriority(4, ["DEF", "MID", "FWD", "GK"]);
+    const midfielders = takeByPriority(4, ["MID", "DEF", "FWD", "GK"]);
+    const forwards = takeByPriority(2, ["FWD", "MID", "DEF", "GK"]);
+    if (available.length > 0) {
+      midfielders.push(...available.splice(0, available.length));
+    }
+
+    this.assignLine(out, defenders, "DEF");
+    this.assignLine(out, midfielders, "MID");
+    this.assignLine(out, forwards, "FWD");
+    return out;
+  }
+
+  private assignLine(target: Record<string, FormationSlot>, ids: string[], line: FormationLine) {
+    for (let i = 0; i < ids.length; i++) {
+      target[ids[i]] = { line, lane: i, laneCount: ids.length };
+    }
   }
 }

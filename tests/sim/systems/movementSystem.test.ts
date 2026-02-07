@@ -67,4 +67,27 @@ describe("MovementSystem", () => {
     const afterDist = Math.hypot(after.x - target.x, after.y - target.y);
     expect(afterDist).toBeLessThan(beforeDist);
   });
+
+  test("maintains line spacing in a 4-4-2 style shape", () => {
+    const state = createInitialMatchState({
+      rngSeed: 14,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+    const system = new MovementSystem();
+    state.ball.state = "CARRIED";
+    state.possession.team = "HOME";
+    state.possession.lastTouchTeam = "HOME";
+    state.ball.pos = { x: 920, y: 270 };
+
+    system.step(state, 800);
+
+    const home = state.teams.HOME.playerIds.map((id) => state.players[id]).filter((p) => p.role !== "GK");
+    const defAvgX = home.filter((p) => p.role === "DEF").reduce((s, p) => s + p.pos.x, 0) / home.filter((p) => p.role === "DEF").length;
+    const midAvgX = home.filter((p) => p.role === "MID").reduce((s, p) => s + p.pos.x, 0) / home.filter((p) => p.role === "MID").length;
+    const fwdAvgX = home.filter((p) => p.role === "FWD").reduce((s, p) => s + p.pos.x, 0) / home.filter((p) => p.role === "FWD").length;
+
+    expect(defAvgX).toBeLessThan(midAvgX);
+    expect(midAvgX).toBeLessThan(fwdAvgX);
+  });
 });
