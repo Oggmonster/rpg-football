@@ -6,7 +6,7 @@ import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/Simulatio
 import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
 import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
-import { DirectionPad } from "../ui/DirectionPad";
+import { ActivePlayerPanel } from "../ui/ActivePlayerPanel";
 import { HandView } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
 import { PerfOverlay } from "../ui/PerfOverlay";
@@ -17,13 +17,14 @@ type CatalogJson = { cards: CardDef[] };
 export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
-  private directionPad!: DirectionPad;
+  private activePlayerPanel!: ActivePlayerPanel;
   private hud!: Hud;
   private perf!: PerfOverlay;
   private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
+  private feedbackText!: Phaser.GameObjects.Text;
   private simAccumulatorMs = 0;
-  private selectedDirection = { x: 1, y: 0 };
+  private feedbackUntilMs = 0;
   private overlayVisible = false;
 
   constructor() {
@@ -47,8 +48,8 @@ export class MatchScene extends Phaser.Scene {
     const handX = 16;
     const handY = sceneH - 140;
     const handWidth = HAND_SIZE * 120 + (HAND_SIZE - 1) * 10;
-    const directionX = handX + handWidth + 28;
-    const directionY = sceneH - 132;
+    const panelX = handX + handWidth + 18;
+    const panelY = sceneH - 140;
 
     this.pitchGfx = this.add.graphics();
     this.pitchGfx.setDepth(0);
@@ -61,25 +62,32 @@ export class MatchScene extends Phaser.Scene {
     this.hud.setDepth(20);
     this.perf.setDepth(21);
 
-    this.directionPad = new DirectionPad(this, directionX, directionY, (dir) => {
-      this.selectedDirection = dir;
-    });
-    this.directionPad.setDepth(41);
-
     this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
-      const ok = this.sim.playCard(cardId, { direction: this.selectedDirection });
+      const ok = this.sim.playCard(cardId, {});
       if (!ok) {
         this.handView.pulseInvalid(cardId);
         return;
       }
+      this.handView.pulsePlayed(cardId);
       this.refreshHand();
     });
     this.handView.setDepth(40);
 
+    this.activePlayerPanel = new ActivePlayerPanel(this, panelX, panelY);
+    this.activePlayerPanel.setDepth(40);
+
+    this.feedbackText = this.add
+      .text(16, 528, "", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#fff2bc",
+      })
+      .setDepth(42);
+
     this.refreshHand();
 
     this.add
-      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card | Set direction", {
+      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -116,10 +124,21 @@ export class MatchScene extends Phaser.Scene {
     const state = this.sim.getRenderState();
     this.matchView.render(state, alpha);
     this.hud.updateFromState(state);
+    this.activePlayerPanel.updatePlayer(this.sim.getActivePlayerForUi());
 
     const events = this.sim.drainEvents();
     if (events.length > 0) {
       this.refreshHand();
+      for (const e of events) {
+        if (e.type === "card_played") this.showFeedback(`Played ${e.cardId}`);
+        if (e.type === "ball_transition" && ["throw_in", "corner_kick", "goal_kick", "free_kick"].includes(e.reason)) {
+          this.showFeedback(e.reason.replace("_", " ").toUpperCase());
+        }
+      }
+    }
+
+    if (this.time.now > this.feedbackUntilMs) {
+      this.feedbackText.setText("");
     }
 
     if (this.overlayVisible) {
@@ -139,7 +158,6 @@ export class MatchScene extends Phaser.Scene {
 
   private refreshHand() {
     const state = this.sim.getRenderState();
-    const activeDeck = this.sim.getActiveDeckKind();
     const home = state.teams.HOME;
     const cardIds = this.sim.getActiveHandCardIds();
 
@@ -153,12 +171,11 @@ export class MatchScene extends Phaser.Scene {
     }
 
     this.handView.setCards(cardIds, cardState);
+  }
 
-    if (activeDeck === "ATTACK") {
-      this.directionPad.setAlpha(1);
-    } else {
-      this.directionPad.setAlpha(0.65);
-    }
+  private showFeedback(text: string) {
+    this.feedbackText.setText(text);
+    this.feedbackUntilMs = this.time.now + 1300;
   }
 
   private drawPitch() {
@@ -194,6 +211,12 @@ export class MatchScene extends Phaser.Scene {
 
     g.strokeRect(pitchX - 6, pitchY + pitchH / 2 - 40, 6, 80);
     g.strokeRect(pitchX + pitchW, pitchY + pitchH / 2 - 40, 6, 80);
+
+    const boxDepth = 150;
+    const boxHeight = 220;
+    const boxY = pitchY + pitchH / 2 - boxHeight / 2;
+    g.strokeRect(pitchX, boxY, boxDepth, boxHeight);
+    g.strokeRect(pitchX + pitchW - boxDepth, boxY, boxDepth, boxHeight);
 
     this.add
       .text(pitchX + 8, pitchY + 8, "Pitch (placeholder)", {

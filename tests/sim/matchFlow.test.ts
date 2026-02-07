@@ -1,6 +1,7 @@
 ﻿import { describe, expect, test } from "vitest";
 import attackCatalog from "../../src/data/cards.attack.json";
 import defenseCatalog from "../../src/data/cards.defense.json";
+import { HAND_SIZE } from "../../src/sim/config/MatchConfig";
 import { MatchSim } from "../../src/sim/MatchSim";
 
 describe("Match flow", () => {
@@ -63,7 +64,7 @@ describe("Match flow", () => {
     expect(state.score.HOME).toBe(0);
     expect(state.score.AWAY).toBe(0);
     expect(state.rngSeed).toBe(700);
-    expect(state.teams.HOME.handAttack.cards.length).toBe(4);
-    expect(state.teams.HOME.handDefense.cards.length).toBe(4);
+    expect(state.teams.HOME.handAttack.cards.length).toBe(HAND_SIZE);
+    expect(state.teams.HOME.handDefense.cards.length).toBe(HAND_SIZE);
   });
 });

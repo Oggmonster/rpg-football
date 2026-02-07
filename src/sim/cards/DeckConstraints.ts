@@ -6,9 +6,9 @@ export const ATTACK_DECK_CONSTRAINTS: DeckConstraints = {
     SHOOT: { min: 2, max: 5 },
     PASS: { min: 2, max: 5 },
     DRIBBLE: { min: 1, max: 4 },
-    THROUGH_PASS: { min: 1, max: 4 },
+    THROUGH_PASS: { min: 0, max: 4 },
     CROSS: { min: 0, max: 3 },
-    LONG_BALL: { min: 0, max: 3 },
+    LONG_BALL: { min: 0, max: 4 },
     RUSH: { min: 1, max: 4 },
   },
 };

@@ -83,4 +83,17 @@ export class CardView extends Phaser.GameObjects.Container {
       },
     });
   }
+
+  pulsePlayed() {
+    this.scene.tweens.add({
+      targets: this.bg,
+      duration: 110,
+      fillColor: 0x1f6c4e,
+      yoyo: true,
+      repeat: 1,
+      onComplete: () => {
+        this.bg.setFillStyle(0x0f2a20, 1);
+      },
+    });
+  }
 }

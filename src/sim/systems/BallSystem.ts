@@ -18,6 +18,11 @@ const ALLOWED: Record<BallSimState, BallSimState[]> = {
   GOAL: ["KICKOFF"],
 };
 
+const PITCH_MIN_X = 24;
+const PITCH_MAX_X = 936;
+const PITCH_MIN_Y = 60;
+const PITCH_MAX_Y = 480;
+
 function distance(a: Vec2, b: Vec2): number {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
@@ -83,12 +88,13 @@ export class BallSystem {
             state.ball.carrierId = null;
             break;
           }
-          if (this.isOutOfPlay(state.ball.pos)) {
-            state.ball.vel = { x: 0, y: 0 };
-            state.ball.targetPos = null;
-            this.tryTransition(state, "LOOSE", "shot_miss_out", out);
+          if (this.handleOutOfPlay(state, out)) {
             break;
           }
+        }
+
+        if (state.ball.state === "IN_FLIGHT" && this.handleOutOfPlay(state, out)) {
+          break;
         }
 
         this.tryAutoReceiveOrLoose(state, out);
@@ -98,6 +104,10 @@ export class BallSystem {
         const damp = Math.max(0, 1 - (1 - TUNING.looseBallFrictionPerSec) * dt);
         state.ball.vel = scale(state.ball.vel, damp);
         state.ball.pos = add(state.ball.pos, scale(state.ball.vel, dt));
+
+        if (this.handleOutOfPlay(state, out)) {
+          break;
+        }
 
         const nearest = this.findNearestPlayer(state, TUNING.pickupRadiusPx);
         if (nearest) {
@@ -171,6 +181,27 @@ export class BallSystem {
     return this.canTransition(state.ball.state, "KICKOFF") ? ((state.ball.state = "KICKOFF"), true) : false;
   }
 
+  restartWithCarrier(
+    state: MatchState,
+    team: TeamId,
+    pos: Vec2,
+    _reason: string,
+    preferKeeper = false
+  ): boolean {
+    const carrier = this.findNearestPlayerFromTeam(state, team, pos, preferKeeper);
+    if (!carrier) return false;
+
+    carrier.pos = { x: pos.x, y: pos.y };
+    this.assignCarrier(state, carrier.id);
+    state.ball.state = "CARRIED";
+    state.ball.lastTouchTeam = team;
+    state.possession.team = team;
+    state.possession.lastTouchTeam = team;
+    state.ball.targetPos = null;
+    state.ball.vel = { x: 0, y: 0 };
+    return true;
+  }
+
   private tryAutoReceiveOrLoose(state: MatchState, out: BallTransition[]) {
     const targetReached = state.ball.targetPos && distance(state.ball.pos, state.ball.targetPos) <= TUNING.arriveThresholdPx;
     const receiver = this.findNearestPlayer(state, TUNING.pickupRadiusPx);
@@ -186,6 +217,21 @@ export class BallSystem {
       state.ball.targetPos = null;
       this.tryTransition(state, "LOOSE", "no_control", out);
     }
+  }
+
+  private handleOutOfPlay(state: MatchState, out: BallTransition[]) {
+    if (!this.isOutOfPlay(state.ball.pos)) return false;
+
+    const restart = this.getRestart(state);
+    if (!restart) return false;
+
+    this.restartWithCarrier(state, restart.team, restart.pos, restart.kind, restart.preferKeeper);
+    out.push({
+      from: restart.from,
+      to: "CARRIED",
+      reason: restart.kind,
+    });
+    return true;
   }
 
   private tryKeeperSave(state: MatchState, out: BallTransition[]): boolean {
@@ -215,9 +261,69 @@ export class BallSystem {
   }
 
   private isOutOfPlay(pos: Vec2): boolean {
-    if (pos.y < 60 || pos.y > 480) return true;
-    if (pos.x < 18 || pos.x > 942) return true;
+    if (pos.y < PITCH_MIN_Y || pos.y > PITCH_MAX_Y) return true;
+    if (pos.x < PITCH_MIN_X || pos.x > PITCH_MAX_X) return true;
     return false;
+  }
+
+  private getRestart(state: MatchState) {
+    const { x, y } = state.ball.pos;
+    const lastTouch = state.ball.lastTouchTeam;
+    const from = state.ball.state;
+
+    if (y < PITCH_MIN_Y || y > PITCH_MAX_Y) {
+      const team: TeamId = lastTouch === "HOME" ? "AWAY" : "HOME";
+      return {
+        kind: "throw_in",
+        team,
+        pos: {
+          x: Math.max(PITCH_MIN_X + 16, Math.min(PITCH_MAX_X - 16, x)),
+          y: y < PITCH_MIN_Y ? PITCH_MIN_Y + 12 : PITCH_MAX_Y - 12,
+        },
+        preferKeeper: false,
+        from,
+      };
+    }
+
+    if (x < PITCH_MIN_X) {
+      if (lastTouch === "HOME") {
+        return {
+          kind: "corner_kick",
+          team: "AWAY" as TeamId,
+          pos: { x: PITCH_MIN_X + 8, y: y < 270 ? PITCH_MIN_Y + 8 : PITCH_MAX_Y - 8 },
+          preferKeeper: false,
+          from,
+        };
+      }
+      return {
+        kind: "goal_kick",
+        team: "HOME" as TeamId,
+        pos: { x: PITCH_MIN_X + 54, y: y < 270 ? 220 : 320 },
+        preferKeeper: true,
+        from,
+      };
+    }
+
+    if (x > PITCH_MAX_X) {
+      if (lastTouch === "AWAY") {
+        return {
+          kind: "corner_kick",
+          team: "HOME" as TeamId,
+          pos: { x: PITCH_MAX_X - 8, y: y < 270 ? PITCH_MIN_Y + 8 : PITCH_MAX_Y - 8 },
+          preferKeeper: false,
+          from,
+        };
+      }
+      return {
+        kind: "goal_kick",
+        team: "AWAY" as TeamId,
+        pos: { x: PITCH_MAX_X - 54, y: y < 270 ? 220 : 320 },
+        preferKeeper: true,
+        from,
+      };
+    }
+
+    return null;
   }
 
   private findNearestPlayer(state: MatchState, maxRadiusPx: number) {
@@ -233,6 +339,26 @@ export class BallSystem {
     }
 
     if (!bestId) return null;
+    return state.players[bestId];
+  }
+
+  private findNearestPlayerFromTeam(state: MatchState, team: TeamId, target: Vec2, preferKeeper: boolean) {
+    let bestId: string | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const id of state.teams[team].playerIds) {
+      const p = state.players[id];
+      if (!p) continue;
+      if (preferKeeper && p.role !== "GK") continue;
+      if (!preferKeeper && p.role === "GK") continue;
+      const d = distance(p.pos, target);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = id;
+      }
+    }
+    if (!bestId) {
+      return state.players[state.teams[team].playerIds[0]] ?? null;
+    }
     return state.players[bestId];
   }
 

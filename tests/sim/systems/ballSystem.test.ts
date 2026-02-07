@@ -109,4 +109,40 @@ describe("BallSystem transitions", () => {
     expect(ok).toBe(false);
     expect(state.ball.state).toBe("KICKOFF");
   });
+
+  test("restarts with throw-in when ball exits sideline", () => {
+    const state = makeState(99);
+    const system = new BallSystem(99);
+    system.step(state, 16);
+
+    state.ball.state = "IN_FLIGHT";
+    state.ball.carrierId = null;
+    state.ball.pos = { x: 400, y: 50 };
+    state.ball.vel = { x: 0, y: -80 };
+    state.ball.targetPos = { x: 400, y: 40 };
+    state.ball.lastTouchTeam = "HOME";
+
+    const transitions = system.step(state, 16);
+    expect(transitions.some((t) => t.reason === "throw_in")).toBe(true);
+    expect(state.ball.state).toBe("CARRIED");
+    expect(state.possession.team).toBe("AWAY");
+  });
+
+  test("restarts with goal kick when attacker sends ball over end line", () => {
+    const state = makeState(100);
+    const system = new BallSystem(100);
+    system.step(state, 16);
+
+    state.ball.state = "IN_FLIGHT";
+    state.ball.carrierId = null;
+    state.ball.pos = { x: 944, y: 260 };
+    state.ball.vel = { x: 120, y: 0 };
+    state.ball.targetPos = { x: 955, y: 260 };
+    state.ball.lastTouchTeam = "HOME";
+
+    const transitions = system.step(state, 16);
+    expect(transitions.some((t) => t.reason === "goal_kick")).toBe(true);
+    expect(state.ball.state).toBe("CARRIED");
+    expect(state.possession.team).toBe("AWAY");
+  });
 });

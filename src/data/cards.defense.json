@@ -1,10 +1,10 @@
 ﻿{
   "cards": [
-    { "id": "DEF_TACKLE_1", "name": "Tackle", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1800 },
-    { "id": "DEF_TACKLE_2", "name": "Tackle+", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1700 },
-    { "id": "DEF_TACKLE_3", "name": "Tackle++", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1650 },
-    { "id": "DEF_TACKLE_4", "name": "Tackle III", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1600 },
-    { "id": "DEF_TACKLE_5", "name": "Tackle IV", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1550 },
+    { "id": "DEF_STAND_1", "name": "Standing Tackle", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1750 },
+    { "id": "DEF_STAND_2", "name": "Standing Tackle+", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1650 },
+    { "id": "DEF_STAND_3", "name": "Standing Tackle++", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1550 },
+    { "id": "DEF_SLIDE_1", "name": "Sliding Tackle", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 2050 },
+    { "id": "DEF_SLIDE_2", "name": "Sliding Tackle+", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1950 },
 
     { "id": "DEF_PRESS_1", "name": "Press", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2400 },
     { "id": "DEF_PRESS_2", "name": "Press+", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2300 },

@@ -47,7 +47,7 @@ export class CardResolver {
   }
 
   private validateAttackContext(type: string): boolean {
-    return ["PASS", "THROUGH_PASS", "DRIBBLE", "RUSH", "SHOOT"].includes(type);
+    return ["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS", "DRIBBLE", "RUSH", "SHOOT"].includes(type);
   }
 
   private validateDefenseContext(type: string): boolean {

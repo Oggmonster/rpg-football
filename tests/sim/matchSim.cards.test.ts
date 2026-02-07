@@ -1,6 +1,7 @@
 ﻿import { describe, expect, test } from "vitest";
 import attackCatalog from "../../src/data/cards.attack.json";
 import defenseCatalog from "../../src/data/cards.defense.json";
+import { HAND_SIZE } from "../../src/sim/config/MatchConfig";
 import { MatchSim } from "../../src/sim/MatchSim";
 
 describe("MatchSim card lifecycle and hand swap", () => {
@@ -36,7 +37,7 @@ describe("MatchSim card lifecycle and hand swap", () => {
 
     const after = JSON.parse(sim.getStateSnapshot());
     expect(ok).toBe(true);
-    expect(after.teams.HOME.handAttack.cards.length).toBe(4);
+    expect(after.teams.HOME.handAttack.cards.length).toBe(HAND_SIZE);
     expect(after.teams.HOME.deckAttack.draw[after.teams.HOME.deckAttack.draw.length - 1]).toBe(cardId);
     expect(before.teams.HOME.handAttack.cards).not.toEqual(after.teams.HOME.handAttack.cards);
   });
@@ -55,7 +56,7 @@ describe("MatchSim card lifecycle and hand swap", () => {
     const after = JSON.parse(sim.getStateSnapshot());
     expect(sim.getActiveDeckKind()).toBe("DEFENSE");
     expect(ok).toBe(true);
-    expect(after.teams.HOME.handDefense.cards.length).toBe(4);
+    expect(after.teams.HOME.handDefense.cards.length).toBe(HAND_SIZE);
     expect(after.teams.HOME.deckDefense.draw[after.teams.HOME.deckDefense.draw.length - 1]).toBe(cardId);
   });
 

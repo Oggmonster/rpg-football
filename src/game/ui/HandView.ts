@@ -56,4 +56,10 @@ export class HandView extends Phaser.GameObjects.Container {
     if (idx < 0) return;
     this.slots[idx].pulseInvalid();
   }
+
+  pulsePlayed(cardId: string) {
+    const idx = this.slotIds.indexOf(cardId);
+    if (idx < 0) return;
+    this.slots[idx].pulsePlayed();
+  }
 }

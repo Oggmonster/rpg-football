@@ -3,7 +3,6 @@
     { "id": "ATT_PASS_1", "name": "Pass", "deck": "ATTACK", "type": "PASS", "cooldownMs": 800 },
     { "id": "ATT_PASS_2", "name": "Pass+", "deck": "ATTACK", "type": "PASS", "cooldownMs": 760 },
     { "id": "ATT_PASS_3", "name": "Pass++", "deck": "ATTACK", "type": "PASS", "cooldownMs": 720 },
-    { "id": "ATT_PASS_4", "name": "Pass III", "deck": "ATTACK", "type": "PASS", "cooldownMs": 700 },
 
     { "id": "ATT_SHOOT_1", "name": "Shoot", "deck": "ATTACK", "type": "SHOOT", "cooldownMs": 3400 },
     { "id": "ATT_SHOOT_2", "name": "Shoot+", "deck": "ATTACK", "type": "SHOOT", "cooldownMs": 3200 },
@@ -13,9 +12,11 @@
     { "id": "ATT_DRIBBLE_2", "name": "Dribble+", "deck": "ATTACK", "type": "DRIBBLE", "cooldownMs": 1800 },
     { "id": "ATT_DRIBBLE_3", "name": "Dribble++", "deck": "ATTACK", "type": "DRIBBLE", "cooldownMs": 1700 },
 
-    { "id": "ATT_THROUGH_1", "name": "Through Pass", "deck": "ATTACK", "type": "THROUGH_PASS", "cooldownMs": 2200 },
-    { "id": "ATT_THROUGH_2", "name": "Through Pass+", "deck": "ATTACK", "type": "THROUGH_PASS", "cooldownMs": 2100 },
-    { "id": "ATT_THROUGH_3", "name": "Through Pass++", "deck": "ATTACK", "type": "THROUGH_PASS", "cooldownMs": 2000 },
+    { "id": "ATT_LONG_1", "name": "Long Pass", "deck": "ATTACK", "type": "LONG_BALL", "cooldownMs": 2200 },
+    { "id": "ATT_LONG_2", "name": "Long Pass+", "deck": "ATTACK", "type": "LONG_BALL", "cooldownMs": 2100 },
+
+    { "id": "ATT_CROSS_1", "name": "Cross", "deck": "ATTACK", "type": "CROSS", "cooldownMs": 2050 },
+    { "id": "ATT_CROSS_2", "name": "Cross+", "deck": "ATTACK", "type": "CROSS", "cooldownMs": 1950 },
 
     { "id": "ATT_RUSH_1", "name": "Rush", "deck": "ATTACK", "type": "RUSH", "cooldownMs": 2400 },
     { "id": "ATT_RUSH_2", "name": "Rush+", "deck": "ATTACK", "type": "RUSH", "cooldownMs": 2250 }
