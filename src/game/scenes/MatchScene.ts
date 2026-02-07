@@ -5,17 +5,22 @@ import { HAND_SIZE } from "../../sim/config/MatchConfig";
 import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
 import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
-import { MatchView } from "../view/MatchView";
+import { DirectionPad } from "../ui/DirectionPad";
 import { HandView } from "../ui/HandView";
+import { Hud } from "../ui/Hud";
+import { MatchView } from "../view/MatchView";
 
 type CatalogJson = { cards: CardDef[] };
 
 export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
+  private directionPad!: DirectionPad;
+  private hud!: Hud;
   private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
   private simAccumulatorMs = 0;
+  private selectedDirection = { x: 1, y: 0 };
 
   constructor() {
     super("MatchScene");
@@ -33,18 +38,26 @@ export class MatchScene extends Phaser.Scene {
 
     this.matchView = new MatchView(this, this.sim.getRenderState());
 
+    this.hud = new Hud(this, 20, 20);
+    this.directionPad = new DirectionPad(this, 438, 540 - 132, (dir) => {
+      this.selectedDirection = dir;
+    });
+
     this.handView = new HandView(this, 16, 540 - 140, HAND_SIZE, (cardId) => {
-      const ok = this.sim.playCard(cardId, { direction: { x: 1, y: 0 } });
-      if (!ok) return;
+      const ok = this.sim.playCard(cardId, { direction: this.selectedDirection });
+      if (!ok) {
+        this.handView.pulseInvalid(cardId);
+        return;
+      }
       this.refreshHand();
     });
 
     this.refreshHand();
 
     this.add
-      .text(16, 16, "P: toggle possession | Click a card to play it", {
+      .text(16, 44, "P: toggle possession | Click card | Set direction pad", {
         fontFamily: "monospace",
-        fontSize: "14px",
+        fontSize: "12px",
         color: "#eafff6",
       })
       .setShadow(1, 1, "#000", 2);
@@ -67,7 +80,9 @@ export class MatchScene extends Phaser.Scene {
     }
 
     const alpha = Phaser.Math.Clamp(this.simAccumulatorMs / SIM_TICK_MS, 0, 1);
-    this.matchView.render(this.sim.getRenderState(), alpha);
+    const state = this.sim.getRenderState();
+    this.matchView.render(state, alpha);
+    this.hud.updateFromState(state);
 
     const events = this.sim.drainEvents();
     if (events.length > 0) {
@@ -80,7 +95,27 @@ export class MatchScene extends Phaser.Scene {
   }
 
   private refreshHand() {
-    this.handView.setCards(this.sim.getActiveHandCardIds());
+    const state = this.sim.getRenderState();
+    const activeDeck = this.sim.getActiveDeckKind();
+    const home = state.teams.HOME;
+    const cardIds = this.sim.getActiveHandCardIds();
+
+    const disabledGlobal = state.phase === "ENDED" || state.flow.goalResetMsRemaining > 0 || home.lockoutMs > 0;
+    const cardState: Record<string, { disabled: boolean; cooldownMs: number }> = {};
+
+    for (const id of cardIds) {
+      const cooldownMs = home.cooldowns[id] ?? 0;
+      const disabled = disabledGlobal || cooldownMs > 0;
+      cardState[id] = { disabled, cooldownMs };
+    }
+
+    this.handView.setCards(cardIds, cardState);
+
+    if (activeDeck === "ATTACK") {
+      this.directionPad.setAlpha(1);
+    } else {
+      this.directionPad.setAlpha(0.65);
+    }
   }
 
   private drawPitch() {

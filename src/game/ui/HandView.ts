@@ -3,6 +3,7 @@ import { CardView } from "./CardView";
 
 export class HandView extends Phaser.GameObjects.Container {
   private slots: CardView[] = [];
+  private slotIds: string[] = [];
   private onPlay: (cardId: string) => void;
 
   constructor(
@@ -33,14 +34,26 @@ export class HandView extends Phaser.GameObjects.Container {
         this.onPlay(cardId);
       });
       this.slots.push(card);
+      this.slotIds.push("");
       this.add(card);
     }
   }
 
-  setCards(cardIds: string[]) {
+  setCards(cardIds: string[], cardState?: Record<string, { disabled: boolean; cooldownMs: number }>) {
     for (let i = 0; i < this.slots.length; i++) {
       const id = cardIds[i] ?? "";
-      this.slots[i].setCard(id);
+      this.slotIds[i] = id;
+      const meta = id && cardState ? cardState[id] : undefined;
+      this.slots[i].setCard(id, {
+        disabled: meta?.disabled ?? false,
+        cooldownMs: meta?.cooldownMs ?? 0,
+      });
     }
+  }
+
+  pulseInvalid(cardId: string) {
+    const idx = this.slotIds.indexOf(cardId);
+    if (idx < 0) return;
+    this.slots[idx].pulseInvalid();
   }
 }
