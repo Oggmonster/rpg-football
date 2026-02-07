@@ -1,0 +1,19 @@
+﻿{
+  "cards": [
+    { "id": "DEF_TACKLE", "name": "Tackle", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1800 },
+    { "id": "DEF_TACKLE2", "name": "Tackle+", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1600 },
+    { "id": "DEF_PRESS", "name": "Press", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2400 },
+    { "id": "DEF_PRESS2", "name": "Press+", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2200 },
+    { "id": "DEF_COVER", "name": "Cover", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1400 },
+    { "id": "DEF_COVER2", "name": "Cover+", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1300 },
+    { "id": "DEF_INTERCEPT", "name": "Intercept", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 2000 },
+    { "id": "DEF_INTERCEPT2", "name": "Intercept+", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 1800 },
+    { "id": "DEF_MARK", "name": "Mark", "deck": "DEFENSE", "type": "MARK", "cooldownMs": 2600 },
+    { "id": "DEF_MARK2", "name": "Mark+", "deck": "DEFENSE", "type": "MARK", "cooldownMs": 2400 },
+    { "id": "DEF_BLOCK", "name": "Block", "deck": "DEFENSE", "type": "BLOCK", "cooldownMs": 2200 },
+    { "id": "DEF_BLOCK2", "name": "Block+", "deck": "DEFENSE", "type": "BLOCK", "cooldownMs": 2000 },
+    { "id": "DEF_DOUBLE", "name": "Double Team", "deck": "DEFENSE", "type": "DOUBLE_TEAM", "cooldownMs": 3000 },
+    { "id": "DEF_DOUBLE2", "name": "Double Team+", "deck": "DEFENSE", "type": "DOUBLE_TEAM", "cooldownMs": 2800 },
+    { "id": "DEF_RUSH_GK", "name": "Rush Keeper", "deck": "DEFENSE", "type": "RUSH_KEEPER", "cooldownMs": 5000 }
+  ]
+}
