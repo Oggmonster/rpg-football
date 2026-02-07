@@ -1,6 +1,8 @@
 ﻿import { CardCatalog } from "./cards/CardCatalog";
 import { CardResolver, type CardInput } from "./cards/CardResolver";
 import type { CardDef } from "./cards/types";
+import { DECK_SIZE, HAND_SIZE, MATCH_DURATION_MS } from "./config/MatchConfig";
+import type { SimEvent } from "./events/SimEvent";
 import { RNG } from "./math/RNG";
 import { shuffleInPlace } from "./math/shuffle";
 import type { DeckKind, DeckState, HandState, MatchState, TeamId } from "./state/MatchState";
@@ -10,6 +12,7 @@ type CatalogJson = { cards: CardDef[] };
 export class MatchSim {
   private state: MatchState;
   private resolver: CardResolver;
+  private eventQueue: SimEvent[] = [];
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
@@ -24,8 +27,8 @@ export class MatchSim {
     const attack = new CardCatalog(args.attackCatalog.cards);
     const defense = new CardCatalog(args.defenseCatalog.cards);
 
-    const attackDeckIds = attack.ids().slice(0, 15);
-    const defenseDeckIds = defense.ids().slice(0, 15);
+    const attackDeckIds = attack.ids().slice(0, DECK_SIZE);
+    const defenseDeckIds = defense.ids().slice(0, DECK_SIZE);
 
     const rng = new RNG(args.rngSeed);
     shuffleInPlace(attackDeckIds, rng);
@@ -55,16 +58,16 @@ export class MatchSim {
 
     const sim = new MatchSim(state, attack, defense);
 
-    sim.drawUpTo(state.teams.HOME.deckAttack, state.teams.HOME.handAttack, 4);
-    sim.drawUpTo(state.teams.HOME.deckDefense, state.teams.HOME.handDefense, 4);
-    sim.drawUpTo(state.teams.AWAY.deckAttack, state.teams.AWAY.handAttack, 4);
-    sim.drawUpTo(state.teams.AWAY.deckDefense, state.teams.AWAY.handDefense, 4);
+    sim.drawUpTo(state.teams.HOME.deckAttack, state.teams.HOME.handAttack, HAND_SIZE);
+    sim.drawUpTo(state.teams.HOME.deckDefense, state.teams.HOME.handDefense, HAND_SIZE);
+    sim.drawUpTo(state.teams.AWAY.deckAttack, state.teams.AWAY.handAttack, HAND_SIZE);
+    sim.drawUpTo(state.teams.AWAY.deckDefense, state.teams.AWAY.handDefense, HAND_SIZE);
 
     return sim;
   }
 
   step(dtMs: number) {
-    this.state.timeMs += dtMs;
+    this.state.timeMs = Math.min(this.state.timeMs + dtMs, MATCH_DURATION_MS);
 
     for (const team of Object.values(this.state.teams)) {
       for (const [id, cd] of Object.entries(team.cooldowns)) {
@@ -75,6 +78,12 @@ export class MatchSim {
 
   togglePossession() {
     this.state.possession = this.state.possession === "HOME" ? "AWAY" : "HOME";
+    this.eventQueue.push({
+      type: "possession_changed",
+      atMs: this.state.timeMs,
+      team: this.state.possession,
+      deck: this.getActiveDeckKind(),
+    });
   }
 
   getActiveTeam(): TeamId {
@@ -102,9 +111,23 @@ export class MatchSim {
 
     hand.cards.splice(idx, 1);
     t.deckAttack.draw.push(cardId);
-    this.drawUpTo(t.deckAttack, hand, 4);
+    this.drawUpTo(t.deckAttack, hand, HAND_SIZE);
+    this.eventQueue.push({
+      type: "card_played",
+      atMs: this.state.timeMs,
+      team,
+      cardId,
+      deck: "ATTACK",
+    });
 
     return true;
+  }
+
+  drainEvents(): SimEvent[] {
+    if (this.eventQueue.length === 0) return [];
+    const events = [...this.eventQueue];
+    this.eventQueue.length = 0;
+    return events;
   }
 
   private drawUpTo(deck: DeckState, hand: HandState, target: number) {

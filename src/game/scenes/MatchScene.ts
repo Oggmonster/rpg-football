@@ -1,6 +1,8 @@
 ﻿import Phaser from "phaser";
 import attackCards from "../../data/cards.attack.json";
 import defenseCards from "../../data/cards.defense.json";
+import { HAND_SIZE } from "../../sim/config/MatchConfig";
+import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
 import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
 import { HandView } from "../ui/HandView";
@@ -11,6 +13,7 @@ export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
+  private simAccumulatorMs = 0;
 
   constructor() {
     super("MatchScene");
@@ -26,13 +29,13 @@ export class MatchScene extends Phaser.Scene {
     this.pitchGfx = this.add.graphics();
     this.drawPitch();
 
-    this.handView = new HandView(this, 16, 540 - 140, 4, (cardId) => {
+    this.handView = new HandView(this, 16, 540 - 140, HAND_SIZE, (cardId) => {
       const ok = this.sim.playCard(cardId, { direction: { x: 1, y: 0 } });
       if (!ok) return;
-      this.handView.setCards(this.sim.getActiveHandCardIds());
+      this.refreshHand();
     });
 
-    this.handView.setCards(this.sim.getActiveHandCardIds());
+    this.refreshHand();
 
     this.add
       .text(16, 16, "P: toggle possession | Click a card to play it", {
@@ -44,12 +47,29 @@ export class MatchScene extends Phaser.Scene {
 
     this.input.keyboard?.on("keydown-P", () => {
       this.sim.togglePossession();
-      this.handView.setCards(this.sim.getActiveHandCardIds());
+      this.refreshHand();
     });
   }
 
   update(_time: number, delta: number) {
-    this.sim.step(delta);
+    const frameDeltaMs = Math.min(delta, 250);
+    this.simAccumulatorMs += frameDeltaMs;
+
+    let steps = 0;
+    while (this.simAccumulatorMs >= SIM_TICK_MS && steps < MAX_SIM_STEPS_PER_FRAME) {
+      this.sim.step(SIM_TICK_MS);
+      this.simAccumulatorMs -= SIM_TICK_MS;
+      steps += 1;
+    }
+
+    const events = this.sim.drainEvents();
+    if (events.length > 0) {
+      this.refreshHand();
+    }
+  }
+
+  private refreshHand() {
+    this.handView.setCards(this.sim.getActiveHandCardIds());
   }
 
   private drawPitch() {
