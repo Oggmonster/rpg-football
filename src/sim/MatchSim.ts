@@ -63,6 +63,7 @@ export class MatchSim {
   private tickCount = 0;
   private maxDebugFrames = 5000;
   private lastActionMessage = "";
+  private lastCardDebugLine = "card: - -> - -> idle";
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
@@ -299,9 +300,9 @@ export class MatchSim {
   }
 
   getActiveDeckKind(): DeckKind {
-    if (this.state.possession.team === this.playerTeam) return "ATTACK";
-    if (this.state.possession.team === "NEUTRAL") {
-      return this.state.possession.lastTouchTeam === this.playerTeam ? "ATTACK" : "DEFENSE";
+    const carrierId = this.state.ball.carrierId;
+    if (carrierId && this.state.players[carrierId] && this.state.players[carrierId].teamId === this.playerTeam) {
+      return "ATTACK";
     }
     return "DEFENSE";
   }
@@ -335,10 +336,12 @@ export class MatchSim {
     this.lastActionMessage = "";
     if (this.state.phase === "ENDED") {
       this.lastActionMessage = "Match ended";
+      this.lastCardDebugLine = `${cardId} -> N/A -> blocked: match ended`;
       return false;
     }
     if (this.state.flow.goalResetMsRemaining > 0) {
       this.lastActionMessage = "Restart in progress";
+      this.lastCardDebugLine = `${cardId} -> N/A -> blocked: restart`;
       return false;
     }
 
@@ -351,6 +354,7 @@ export class MatchSim {
     const idx = hand.cards.indexOf(cardId);
     if (idx < 0) {
       this.lastActionMessage = "Card not in active hand";
+      this.lastCardDebugLine = `${cardId} -> N/A -> rejected: not_in_hand`;
       return false;
     }
 
@@ -358,6 +362,7 @@ export class MatchSim {
       const carrierId = this.state.ball.carrierId;
       if (!carrierId || this.state.players[carrierId].teamId !== team) {
         this.lastActionMessage = "No carrier under control";
+        this.lastCardDebugLine = `${cardId} -> N/A -> rejected: no_carrier`;
         return false;
       }
     }
@@ -367,6 +372,7 @@ export class MatchSim {
     const card = this.resolver.tryPlay(this.state, team, cardId, activeDeck);
     if (!card) {
       this.lastActionMessage = "Card unavailable (cooldown/lockout/context)";
+      this.lastCardDebugLine = `${cardId} -> N/A -> rejected: cooldown_lockout_context`;
       return false;
     }
 
@@ -375,6 +381,7 @@ export class MatchSim {
       teamState.cooldowns[cardId] = prevCooldown;
       teamState.lockoutMs = prevLockout;
       this.lastActionMessage = "Card had no valid target";
+      this.lastCardDebugLine = `${cardId} -> ${card.type} -> rejected: invalid_target`;
       return false;
     }
 
@@ -391,11 +398,16 @@ export class MatchSim {
     });
 
     this.lastActionMessage = "";
+    this.lastCardDebugLine = `${cardId} -> ${card.type} -> played`;
     return true;
   }
 
   getLastActionMessage() {
     return this.lastActionMessage;
+  }
+
+  getLastCardDebugLine() {
+    return this.lastCardDebugLine;
   }
 
   drainEvents(): SimEvent[] {

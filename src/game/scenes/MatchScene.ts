@@ -34,6 +34,7 @@ export class MatchScene extends Phaser.Scene {
   private pitchGfx!: Phaser.GameObjects.Graphics;
   private feedbackText!: Phaser.GameObjects.Text;
   private announceText!: Phaser.GameObjects.Text;
+  private cardDebugText!: Phaser.GameObjects.Text;
   private simAccumulatorMs = 0;
   private feedbackUntilMs = 0;
   private overlayVisible = false;
@@ -76,6 +77,7 @@ export class MatchScene extends Phaser.Scene {
 
     this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
       const ok = this.sim.playCard(cardId, {});
+      this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
       if (!ok) {
         this.handView.pulseInvalid(cardId);
         const reason = this.sim.getLastActionMessage();
@@ -127,6 +129,14 @@ export class MatchScene extends Phaser.Scene {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
+      })
+      .setShadow(1, 1, "#000", 2);
+
+    this.cardDebugText = this.add
+      .text(16, 62, `Card Debug: ${this.sim.getLastCardDebugLine()}`, {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#ffd791",
       })
       .setShadow(1, 1, "#000", 2);
 
@@ -286,6 +296,7 @@ export class MatchScene extends Phaser.Scene {
     this.activePlayerPanel.setScrollFactor(0);
     this.feedbackText.setScrollFactor(0);
     this.helpText.setScrollFactor(0);
+    this.cardDebugText.setScrollFactor(0);
   }
 
   private centerCameraOn(x: number, y: number, vx: number, vy: number, instant: boolean) {

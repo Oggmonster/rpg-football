@@ -36,13 +36,14 @@ export class CardResolver {
     if (cd > 0) return false;
     if (t.lockoutMs > 0) return false;
 
-    const teamHasBall = match.possession.team === team;
+    const carrierId = match.ball.carrierId;
+    const teamControlsBall = !!carrierId && !!match.players[carrierId] && match.players[carrierId].teamId === team;
     if (card.deck === "ATTACK") {
-      if (!teamHasBall) return false;
+      if (!teamControlsBall) return false;
       return this.validateAttackContext(card.type);
     }
 
-    if (teamHasBall) return false;
+    if (teamControlsBall) return false;
     return this.validateDefenseContext(card.type);
   }
 

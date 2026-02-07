@@ -71,4 +71,37 @@ describe("MatchSim card lifecycle and hand swap", () => {
       })
     ).toThrowError();
   });
+
+  test("switches to defense hand while ball is in flight", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 222,
+    });
+
+    const state = sim.getRenderState();
+    state.ball.state = "CARRIED";
+    state.teams.HOME.handAttack.cards[0] = "ATT_PASS_1";
+
+    const ok = sim.playCard("ATT_PASS_1", {});
+    expect(ok).toBe(true);
+    expect(state.ball.carrierId).toBeNull();
+    expect(sim.getActiveDeckKind()).toBe("DEFENSE");
+    expect(sim.getActiveHandCardIds()).toEqual(state.teams.HOME.handDefense.cards);
+  });
+
+  test("records card debug trace with resolved type and result", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 333,
+    });
+    const state = sim.getRenderState();
+    state.ball.state = "CARRIED";
+    state.teams.HOME.handAttack.cards[0] = "ATT_PASS_1";
+
+    const ok = sim.playCard("ATT_PASS_1", {});
+    expect(ok).toBe(true);
+    expect(sim.getLastCardDebugLine()).toContain("ATT_PASS_1 -> PASS -> played");
+  });
 });

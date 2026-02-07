@@ -30,7 +30,7 @@ export class MatchView {
     for (const p of Object.values(state.players)) {
       const view = this.players.get(p.id);
       if (view) {
-        view.update(p, alpha);
+        view.update(p, alpha, state.ball.carrierId === p.id);
       } else {
         this.players.set(p.id, new PlayerView(this.scene, p));
       }

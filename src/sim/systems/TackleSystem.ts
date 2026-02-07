@@ -42,8 +42,8 @@ export class TackleSystem {
       );
 
       if (this.rng.next() < chance) {
-        const loose = ballSystem.forceLoose(state);
-        if (loose) {
+        const won = ballSystem.restartWithCarrier(state, defendingTeam, carrier.pos, "tackle_win", false);
+        if (won) {
           defender.intent = null;
           return;
         }

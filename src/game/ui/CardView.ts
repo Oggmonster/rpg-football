@@ -19,6 +19,7 @@ export class CardView extends Phaser.GameObjects.Container {
 
     this.bg = scene.add.rectangle(0, 0, w, h, 0x0f2a20, 1).setOrigin(0, 0);
     this.bg.setStrokeStyle(2, 0xb7ffe3, 0.9);
+    this.bg.setScrollFactor(0);
 
     this.label = scene.add.text(8, 8, "-", {
       fontFamily: "monospace",
@@ -26,6 +27,7 @@ export class CardView extends Phaser.GameObjects.Container {
       color: "#eafff6",
       wordWrap: { width: w - 16 },
     });
+    this.label.setScrollFactor(0);
 
     this.cooldownLabel = scene.add
       .text(w - 8, h - 8, "", {
@@ -34,8 +36,10 @@ export class CardView extends Phaser.GameObjects.Container {
         color: "#ffd280",
       })
       .setOrigin(1, 1);
+    this.cooldownLabel.setScrollFactor(0);
 
     this.add([this.bg, this.label, this.cooldownLabel]);
+    this.setScrollFactor(0);
 
     this.bg.setInteractive({ useHandCursor: true });
     this.bg.on("pointerdown", () => {

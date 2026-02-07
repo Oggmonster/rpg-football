@@ -42,7 +42,7 @@ export class PlayerView {
     this.label.destroy();
   }
 
-  update(player: PlayerState, alpha: number) {
+  update(player: PlayerState, alpha: number, isBallCarrier = false) {
     const x = player.pos.x;
     const y = player.pos.y;
 
@@ -61,20 +61,22 @@ export class PlayerView {
     this.applyTeamStyle(player);
 
     const intentType = player.intent?.type;
-    if (intentType && hasKickIntent(intentType)) {
+    if (!isBallCarrier && intentType && hasKickIntent(intentType)) {
       this.body.setScale(1.16, 0.9);
-      this.body.setFillStyle(0x9ef2c7, 1);
-    } else if (intentType && hasDefensiveIntent(intentType)) {
+      this.body.setStrokeStyle(1, 0xb4fff0, 0.95);
+    } else if (!isBallCarrier && intentType && hasDefensiveIntent(intentType)) {
       this.body.setScale(0.92, 1.12);
-      this.body.setFillStyle(0xff6c5c, 1);
+      this.body.setStrokeStyle(1, 0xff8f7f, 0.95);
     }
   }
 
   private applyTeamStyle(player: PlayerState) {
     if (player.role === "GK") {
-      this.body.setFillStyle(player.teamId === "HOME" ? 0x2d5ca8 : 0xa88b2d, 1);
+      this.body.setFillStyle(player.teamId === "HOME" ? 0x2449a6 : 0xd2a600, 1);
+      this.body.setStrokeStyle(1, 0x0f1311, 0.8);
       return;
     }
-    this.body.setFillStyle(player.teamId === "HOME" ? 0x2dd4bf : 0xff9b3f, 1);
+    this.body.setFillStyle(player.teamId === "HOME" ? 0x2f6bff : 0xffd347, 1);
+    this.body.setStrokeStyle(1, 0x0f1311, 0.8);
   }
 }
