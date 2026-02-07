@@ -62,6 +62,7 @@ export class MatchSim {
   private debugFrames: SimDebugFrame[] = [];
   private tickCount = 0;
   private maxDebugFrames = 5000;
+  private lastActionMessage = "";
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
@@ -163,7 +164,7 @@ export class MatchSim {
 
     this.expireIntents();
 
-    this.aiSystem.step(this.state, this.ballSystem, this.passSystem);
+    this.aiSystem.step(this.state, this.ballSystem, this.passSystem, this.playerTeam);
     this.interceptSystem.step(this.state);
     this.movementSystem.step(this.state, dtMs);
     this.tackleSystem.step(this.state, dtMs, this.ballSystem);
@@ -233,6 +234,7 @@ export class MatchSim {
     this.state.ball.carrierId = null;
     this.state.ball.targetPos = null;
     this.state.ball.vel = { x: 0, y: 0 };
+    this.state.ball.carrierProtectedUntilMs = 0;
     this.state.ball.lastTouchTeam = team;
     this.state.flow.goalResetMsRemaining = 1500;
     this.state.flow.restartTeam = team === "HOME" ? "AWAY" : "HOME";
@@ -280,6 +282,7 @@ export class MatchSim {
     this.state.ball.state = "CARRIED";
     this.state.ball.vel = { x: 0, y: 0 };
     this.state.ball.targetPos = null;
+    this.state.ball.carrierProtectedUntilMs = this.state.timeMs + 600;
     this.state.ball.lastTouchTeam = next;
     this.state.possession.team = next;
     this.state.possession.lastTouchTeam = next;
@@ -329,8 +332,15 @@ export class MatchSim {
   }
 
   playCard(cardId: string, input: CardInput): boolean {
-    if (this.state.phase === "ENDED") return false;
-    if (this.state.flow.goalResetMsRemaining > 0) return false;
+    this.lastActionMessage = "";
+    if (this.state.phase === "ENDED") {
+      this.lastActionMessage = "Match ended";
+      return false;
+    }
+    if (this.state.flow.goalResetMsRemaining > 0) {
+      this.lastActionMessage = "Restart in progress";
+      return false;
+    }
 
     const team = this.playerTeam;
     const activeDeck = this.getActiveDeckKind();
@@ -339,12 +349,34 @@ export class MatchSim {
     const deck = activeDeck === "ATTACK" ? teamState.deckAttack : teamState.deckDefense;
 
     const idx = hand.cards.indexOf(cardId);
-    if (idx < 0) return false;
+    if (idx < 0) {
+      this.lastActionMessage = "Card not in active hand";
+      return false;
+    }
 
+    if (activeDeck === "ATTACK") {
+      const carrierId = this.state.ball.carrierId;
+      if (!carrierId || this.state.players[carrierId].teamId !== team) {
+        this.lastActionMessage = "No carrier under control";
+        return false;
+      }
+    }
+
+    const prevCooldown = teamState.cooldowns[cardId] ?? 0;
+    const prevLockout = teamState.lockoutMs;
     const card = this.resolver.tryPlay(this.state, team, cardId, activeDeck);
-    if (!card) return false;
+    if (!card) {
+      this.lastActionMessage = "Card unavailable (cooldown/lockout/context)";
+      return false;
+    }
 
-    this.applyCardEffect(team, card, input);
+    const applied = this.applyCardEffect(team, card, input);
+    if (!applied) {
+      teamState.cooldowns[cardId] = prevCooldown;
+      teamState.lockoutMs = prevLockout;
+      this.lastActionMessage = "Card had no valid target";
+      return false;
+    }
 
     hand.cards.splice(idx, 1);
     deck.draw.push(cardId);
@@ -358,7 +390,12 @@ export class MatchSim {
       deck: activeDeck,
     });
 
+    this.lastActionMessage = "";
     return true;
+  }
+
+  getLastActionMessage() {
+    return this.lastActionMessage;
   }
 
   drainEvents(): SimEvent[] {
@@ -414,37 +451,29 @@ export class MatchSim {
   private applyCardEffect(team: TeamId, card: CardDef, _input: CardInput) {
     switch (card.type) {
       case "PASS":
-        this.playShortPass(team);
-        break;
+        return this.playShortPass(team);
       case "THROUGH_PASS":
       case "LONG_BALL":
-        this.playLongPass(team);
-        break;
+        return this.playLongPass(team);
       case "CROSS":
-        this.playCross(team);
-        break;
+        return this.playCross(team);
       case "DRIBBLE":
-        this.playDribble(team);
-        break;
+        return this.playDribble(team);
       case "RUSH":
-        this.playRush(team);
-        break;
+        return this.playRush(team);
       case "SHOOT":
-        this.playShoot(team);
-        break;
+        return this.playShoot(team);
       case "TACKLE":
-        this.playTackle(team, card.id.includes("SLIDE") ? "SLIDING" : "STANDING");
-        break;
+        return this.playTackle(team, card.id.includes("SLIDE") ? "SLIDING" : "STANDING");
       case "PRESS":
-        this.playPress(team);
-        break;
+        return this.playPress(team);
       case "COVER":
         this.assignNearestDefenderIntent(team, {
           type: "COVER_ZONE",
           expiresAtMs: this.state.timeMs + 1500,
           priority: 90,
         });
-        break;
+        return true;
       case "INTERCEPT":
         this.assignNearestDefenderIntent(team, {
           type: "INTERCEPT_LANE",
@@ -452,15 +481,20 @@ export class MatchSim {
           priority: 95,
         });
         this.interceptSystem.step(this.state);
-        break;
+        return true;
+      default:
+        return false;
     }
   }
 
   private playShortPass(team: TeamId) {
     const carrier = this.getCarrierForTeam(team);
-    if (!carrier) return;
-    const target = this.pickBestTeammate(team, carrier.id, 32, 200, false);
-    if (!target) return;
+    if (!carrier) return false;
+    const target =
+      this.pickBestTeammate(team, carrier.id, 16, 300, false) ??
+      this.pickBestTeammate(team, carrier.id, 8, 520, false) ??
+      this.getNearestTeammate(team, carrier.id);
+    if (!target) return false;
 
     carrier.intent = {
       type: "PASS_TO_DIRECTION",
@@ -469,14 +503,19 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 700,
       priority: 100,
     };
-    this.ballSystem.passTo(this.state, target.pos);
+    const ok = this.ballSystem.passTo(this.state, target.pos);
+    if (!ok) return false;
+    this.ballSystem.grantCarrierProtection(this.state, 260);
+    return true;
   }
 
   private playLongPass(team: TeamId) {
     const carrier = this.getCarrierForTeam(team);
-    if (!carrier) return;
-    const target = this.pickBestTeammate(team, carrier.id, 120, 420, true);
-    if (!target) return;
+    if (!carrier) return false;
+    const target =
+      this.pickBestTeammate(team, carrier.id, 80, 650, true) ??
+      this.pickBestTeammate(team, carrier.id, 30, 760, true);
+    if (!target) return false;
 
     carrier.intent = {
       type: "THROUGH_TO_DIRECTION",
@@ -485,12 +524,14 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 850,
       priority: 100,
     };
-    this.ballSystem.passTo(this.state, target.pos);
+    const ok = this.ballSystem.passTo(this.state, target.pos);
+    if (!ok) return false;
+    return true;
   }
 
   private playCross(team: TeamId) {
     const carrier = this.getCarrierForTeam(team);
-    if (!carrier) return;
+    if (!carrier) return false;
 
     const inOwnHalf = team === "HOME" ? carrier.pos.x < 480 : carrier.pos.x > 480;
     let target: Vec2 | null = null;
@@ -504,31 +545,39 @@ export class MatchSim {
       target = boxMate ? { x: boxMate.pos.x, y: boxMate.pos.y } : { x: boxCenterX, y: PITCH_CENTER_Y };
     }
 
-    if (!target) return;
+    if (!target) return false;
     carrier.intent = {
       type: "THROUGH_TO_DIRECTION",
       targetPos: target,
       expiresAtMs: this.state.timeMs + 900,
       priority: 100,
     };
-    this.ballSystem.passTo(this.state, target);
+    const ok = this.ballSystem.passTo(this.state, target);
+    if (!ok) return false;
+    return true;
   }
 
   private playRush(team: TeamId) {
     const carrier = this.getCarrierForTeam(team);
-    if (!carrier) return;
-    const target = this.findOpenRunTarget(carrier.pos, team, 220);
+    if (!carrier) return false;
+    const target = this.findOpenRunTarget(carrier.pos, team, 260);
+    const progress = team === "HOME" ? target.x - carrier.pos.x : carrier.pos.x - target.x;
+    if (progress < 60) {
+      target.x = team === "HOME" ? Math.min(PITCH_RIGHT - 12, carrier.pos.x + 90) : Math.max(PITCH_LEFT + 12, carrier.pos.x - 90);
+    }
     carrier.intent = {
       type: "CARRY_BURST",
       targetPos: target,
       expiresAtMs: this.state.timeMs + 950,
       priority: 100,
     };
+    this.ballSystem.grantCarrierProtection(this.state, 850);
+    return true;
   }
 
   private playDribble(team: TeamId) {
     const carrier = this.getCarrierForTeam(team);
-    if (!carrier) return;
+    if (!carrier) return false;
     const target = this.findOpenRunTarget(carrier.pos, team, 140);
     carrier.intent = {
       type: "DRIBBLE_TO_DIRECTION",
@@ -536,11 +585,13 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 800,
       priority: 100,
     };
+    this.ballSystem.grantCarrierProtection(this.state, 700);
+    return true;
   }
 
   private playShoot(team: TeamId) {
     const carrier = this.getCarrierForTeam(team);
-    if (!carrier) return;
+    if (!carrier) return false;
     const goal = this.getShotTarget(team);
     const dist = Math.hypot(goal.x - carrier.pos.x, goal.y - carrier.pos.y);
     const inGoodLane = this.isInOppPenaltyArea(carrier.pos, team) || dist < 250;
@@ -551,8 +602,7 @@ export class MatchSim {
         expiresAtMs: this.state.timeMs + 500,
         priority: 100,
       };
-      this.ballSystem.shootTo(this.state, goal);
-      return;
+      return this.ballSystem.shootTo(this.state, goal);
     }
 
     const betterX = team === "HOME" ? Math.min(PITCH_RIGHT - 90, carrier.pos.x + 90) : Math.max(PITCH_LEFT + 90, carrier.pos.x - 90);
@@ -562,6 +612,8 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 800,
       priority: 100,
     };
+    this.ballSystem.grantCarrierProtection(this.state, 500);
+    return true;
   }
 
   private playTackle(team: TeamId, mode: "STANDING" | "SLIDING") {
@@ -570,15 +622,17 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + (mode === "SLIDING" ? 820 : 620),
       priority: 100,
     });
-    this.tackleSystem.tryCardTackle(this.state, team, this.ballSystem, mode);
+    const result = this.tackleSystem.tryCardTackle(this.state, team, this.ballSystem, mode);
+    this.lastActionMessage = result === "MISS" ? "Tackle: closing down" : `Tackle ${result.toLowerCase()}`;
+    return true;
   }
 
   private playPress(team: TeamId) {
     const carrierId = this.state.ball.carrierId;
-    if (!carrierId) return;
+    if (!carrierId) return false;
     const carrier = this.state.players[carrierId];
     const nearest = this.getNearestOutfieldPlayer(team);
-    if (!nearest) return;
+    if (!nearest) return false;
     nearest.intent = {
       type: "PRESS_ZONE",
       targetPlayerId: carrier.id,
@@ -586,6 +640,7 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 1200,
       priority: 95,
     };
+    return true;
   }
 
   private assignCarrierIntent(team: TeamId, intent: IntentState) {
@@ -665,6 +720,22 @@ export class MatchSim {
       }
     }
 
+    return bestId ? this.state.players[bestId] : null;
+  }
+
+  private getNearestTeammate(team: TeamId, fromId: string) {
+    const from = this.state.players[fromId];
+    let bestId: string | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const id of this.state.teams[team].playerIds) {
+      if (id === fromId) continue;
+      const p = this.state.players[id];
+      const d = Math.hypot(p.pos.x - from.pos.x, p.pos.y - from.pos.y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = id;
+      }
+    }
     return bestId ? this.state.players[bestId] : null;
   }
 

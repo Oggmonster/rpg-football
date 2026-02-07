@@ -20,16 +20,26 @@ export class TackleSystem {
     const carrier = state.players[state.ball.carrierId];
     const defendingTeam = carrier.teamId === "HOME" ? "AWAY" : "HOME";
     const dt = dtMs / 1000;
+    const protectedBall = state.timeMs < state.ball.carrierProtectedUntilMs;
 
     for (const id of state.teams[defendingTeam].playerIds) {
       const defender = state.players[id];
-      if (defender.intent?.type !== "TACKLE_TARGET") continue;
-      if (dist(defender.pos, carrier.pos) > 26) continue;
+      const intentType = defender.intent?.type;
+      if (intentType !== "TACKLE_TARGET" && intentType !== "PRESS_ZONE") continue;
+      const distanceToCarrier = dist(defender.pos, carrier.pos);
+      const engageRange = intentType === "TACKLE_TARGET" ? 30 : 22;
+      if (distanceToCarrier > engageRange) continue;
 
       const atk = carrier.stats.dri * 0.65 + carrier.stats.pac * 0.35;
       const def = defender.stats.def * 0.6 + defender.stats.phy * 0.4;
       const base = 0.35 + (def - atk) / 220;
-      const chance = Math.max(0.08, Math.min(0.88, base * (0.55 + TUNING.tackleAggression) * dt * 6));
+      const intentScale = intentType === "TACKLE_TARGET" ? 1 : 0.58;
+      const protectionScale = protectedBall ? 0.62 : 1;
+      const spacingScale = Math.max(0.55, 1 - distanceToCarrier / 30);
+      const chance = Math.max(
+        0.012,
+        Math.min(0.52, base * (0.72 + TUNING.tackleAggression) * dt * 4.8 * intentScale * protectionScale * spacingScale)
+      );
 
       if (this.rng.next() < chance) {
         const loose = ballSystem.forceLoose(state);

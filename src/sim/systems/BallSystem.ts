@@ -97,6 +97,7 @@ export class BallSystem {
             state.ball.vel = { x: 0, y: 0 };
             state.ball.targetPos = null;
             state.ball.carrierId = null;
+            state.ball.carrierProtectedUntilMs = 0;
             break;
           }
           if (this.handleOutOfPlay(state, out)) {
@@ -158,6 +159,7 @@ export class BallSystem {
     state.ball.targetPos = { ...targetPos };
     state.ball.carrierId = null;
     state.ball.lastTouchTeam = carrier.teamId;
+    state.ball.carrierProtectedUntilMs = 0;
     return this.canTransition(state.ball.state, "IN_FLIGHT") ? ((state.ball.state = "IN_FLIGHT"), true) : false;
   }
 
@@ -171,6 +173,7 @@ export class BallSystem {
     state.ball.targetPos = { ...targetPos };
     state.ball.carrierId = null;
     state.ball.lastTouchTeam = carrier.teamId;
+    state.ball.carrierProtectedUntilMs = 0;
     return this.canTransition(state.ball.state, "SHOT") ? ((state.ball.state = "SHOT"), true) : false;
   }
 
@@ -179,6 +182,7 @@ export class BallSystem {
     state.ball.carrierId = null;
     state.ball.targetPos = null;
     state.ball.vel = { x: 0, y: 0 };
+    state.ball.carrierProtectedUntilMs = 0;
     return this.canTransition(state.ball.state, "LOOSE") ? ((state.ball.state = "LOOSE"), true) : false;
   }
 
@@ -189,6 +193,7 @@ export class BallSystem {
     state.ball.vel = { x: 0, y: 0 };
     state.ball.targetPos = null;
     state.ball.lastTouchTeam = team;
+    state.ball.carrierProtectedUntilMs = state.timeMs + 700;
     return this.canTransition(state.ball.state, "KICKOFF") ? ((state.ball.state = "KICKOFF"), true) : false;
   }
 
@@ -210,7 +215,13 @@ export class BallSystem {
     state.possession.lastTouchTeam = team;
     state.ball.targetPos = null;
     state.ball.vel = { x: 0, y: 0 };
+    state.ball.carrierProtectedUntilMs = state.timeMs + 450;
     return true;
+  }
+
+  grantCarrierProtection(state: MatchState, durationMs: number) {
+    if (state.ball.state !== "CARRIED" || !state.ball.carrierId) return;
+    state.ball.carrierProtectedUntilMs = Math.max(state.ball.carrierProtectedUntilMs, state.timeMs + durationMs);
   }
 
   private tryAutoReceiveOrLoose(state: MatchState, out: BallTransition[]) {
@@ -266,6 +277,7 @@ export class BallSystem {
     } else {
       state.ball.carrierId = null;
       state.ball.vel = { x: 0, y: 0 };
+      state.ball.carrierProtectedUntilMs = 0;
       this.tryTransition(state, "LOOSE", "keeper_parry", out);
     }
     return true;
@@ -380,6 +392,7 @@ export class BallSystem {
     state.ball.vel = { x: 0, y: 0 };
     state.ball.targetPos = null;
     state.ball.lastTouchTeam = p.teamId;
+    state.ball.carrierProtectedUntilMs = state.timeMs + 520;
   }
 
   private tryTransition(state: MatchState, to: BallSimState, reason: string, out: BallTransition[]) {

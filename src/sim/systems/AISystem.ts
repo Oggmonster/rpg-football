@@ -9,12 +9,12 @@ function dist(a: Vec2, b: Vec2): number {
 }
 
 export class AISystem {
-  step(state: MatchState, ballSystem: BallSystem, passSystem: PassSystem) {
+  step(state: MatchState, ballSystem: BallSystem, passSystem: PassSystem, humanControlledTeam?: TeamId) {
     this.updateTeamTacticalState(state);
     this.assignBallChaseAndPressure(state);
     this.assignMarks(state);
     this.assignAttackingSupport(state);
-    this.decideBallCarrierAction(state, ballSystem, passSystem);
+    this.decideBallCarrierAction(state, ballSystem, passSystem, humanControlledTeam);
   }
 
   private updateTeamTacticalState(state: MatchState) {
@@ -62,12 +62,13 @@ export class AISystem {
 
     const primary = this.findNearestOutfielderToPoint(state, defendingTeam, carrier.pos);
     if (primary) {
+      const distToCarrier = dist(primary.pos, carrier.pos);
       this.assignIntentIfFree(primary.id, state, {
-        type: "TACKLE_TARGET",
+        type: distToCarrier < 56 ? "TACKLE_TARGET" : "PRESS_ZONE",
         targetPos: { x: carrier.pos.x, y: carrier.pos.y },
         targetPlayerId: carrier.id,
-        expiresAtMs: state.timeMs + 280,
-        priority: 92,
+        expiresAtMs: state.timeMs + 480,
+        priority: distToCarrier < 56 ? 96 : 86,
       });
     }
 
@@ -163,9 +164,15 @@ export class AISystem {
     }
   }
 
-  private decideBallCarrierAction(state: MatchState, ballSystem: BallSystem, passSystem: PassSystem) {
+  private decideBallCarrierAction(
+    state: MatchState,
+    ballSystem: BallSystem,
+    passSystem: PassSystem,
+    humanControlledTeam?: TeamId
+  ) {
     if (state.ball.state !== "CARRIED" || !state.ball.carrierId) return;
     const carrier = state.players[state.ball.carrierId];
+    if (humanControlledTeam && carrier.teamId === humanControlledTeam) return;
     if (carrier.intent) return;
 
     const team = carrier.teamId;
@@ -234,6 +241,19 @@ export class AISystem {
     const player = state.players[playerId];
     if (!player) return;
     const current = player.intent;
+    if (
+      current &&
+      current.type === intent.type &&
+      current.targetPlayerId &&
+      intent.targetPlayerId &&
+      current.targetPlayerId === intent.targetPlayerId
+    ) {
+      player.intent = {
+        ...current,
+        ...intent,
+      };
+      return;
+    }
     if (current && current.expiresAtMs > state.timeMs && current.priority >= intent.priority) {
       return;
     }

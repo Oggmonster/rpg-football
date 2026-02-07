@@ -65,16 +65,16 @@ export class MovementSystem {
       return this.goalkeeperAnchor(state, team);
     }
 
-    if (state.ball.carrierId === playerId && state.ball.state === "CARRIED") {
-      return this.ballCarrierTarget(state, team, p.pos.y);
-    }
-
     if (p.intent?.targetPos) return p.intent.targetPos;
     if (p.intent?.direction) {
       return {
         x: p.pos.x + p.intent.direction.x * 52,
         y: p.pos.y + p.intent.direction.y * 52,
       };
+    }
+
+    if (state.ball.carrierId === playerId && state.ball.state === "CARRIED") {
+      return this.ballCarrierTarget(state, team, p.pos.y);
     }
 
     if (p.markTargetId && state.players[p.markTargetId] && state.possession.team !== team) {

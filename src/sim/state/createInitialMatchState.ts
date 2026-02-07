@@ -169,6 +169,7 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
       targetPos: null,
       carrierId: kickoffCarrierId,
       lastTouchTeam: "HOME",
+      carrierProtectedUntilMs: 0,
     },
     flow: {
       goalResetMsRemaining: 0,

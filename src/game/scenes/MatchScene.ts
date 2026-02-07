@@ -33,6 +33,7 @@ export class MatchScene extends Phaser.Scene {
   private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
   private feedbackText!: Phaser.GameObjects.Text;
+  private announceText!: Phaser.GameObjects.Text;
   private simAccumulatorMs = 0;
   private feedbackUntilMs = 0;
   private overlayVisible = false;
@@ -57,10 +58,10 @@ export class MatchScene extends Phaser.Scene {
 
     const sceneH = this.scale.height;
     const handX = 16;
-    const handY = sceneH - 140;
+    const handY = sceneH - 116;
     const handWidth = HAND_SIZE * 120 + (HAND_SIZE - 1) * 10;
     const panelX = handX + handWidth + 18;
-    const panelY = sceneH - 140;
+    const panelY = sceneH - 116;
 
     this.pitchGfx = this.add.graphics();
     this.pitchGfx.setDepth(0);
@@ -77,6 +78,19 @@ export class MatchScene extends Phaser.Scene {
       const ok = this.sim.playCard(cardId, {});
       if (!ok) {
         this.handView.pulseInvalid(cardId);
+        const reason = this.sim.getLastActionMessage();
+        if (reason) {
+          this.showFeedback(reason);
+          this.announceText.setText(reason).setScale(0.94).setAlpha(1);
+          this.tweens.add({
+            targets: this.announceText,
+            scaleX: 1.02,
+            scaleY: 1.02,
+            alpha: 0,
+            duration: 620,
+            ease: "Quad.easeOut",
+          });
+        }
         return;
       }
       this.handView.pulsePlayed(cardId);
@@ -88,12 +102,23 @@ export class MatchScene extends Phaser.Scene {
     this.activePlayerPanel.setDepth(40);
 
     this.feedbackText = this.add
-      .text(16, 528, "", {
+      .text(16, 532, "", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#fff2bc",
       })
       .setDepth(42);
+
+    this.announceText = this.add
+      .text(this.scale.width / 2, 78, "", {
+        fontFamily: "monospace",
+        fontSize: "18px",
+        color: "#fff2bc",
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(45)
+      .setScrollFactor(0)
+      .setAlpha(0);
 
     this.refreshHand();
 
@@ -141,12 +166,23 @@ export class MatchScene extends Phaser.Scene {
     this.matchView.render(state, alpha);
     this.hud.updateFromState(state);
     this.activePlayerPanel.updatePlayer(this.sim.getActivePlayerForUi());
+    this.refreshHand();
 
     const events = this.sim.drainEvents();
     if (events.length > 0) {
-      this.refreshHand();
       for (const e of events) {
-        if (e.type === "card_played") this.showFeedback(`Played ${e.cardId}`);
+        if (e.type === "card_played") {
+          this.showFeedback(`Played ${e.cardId}`);
+          this.announceText.setText(e.cardId).setScale(0.9).setAlpha(1);
+          this.tweens.add({
+            targets: this.announceText,
+            scaleX: 1.08,
+            scaleY: 1.08,
+            alpha: 0,
+            duration: 520,
+            ease: "Quad.easeOut",
+          });
+        }
         if (e.type === "ball_transition" && ["throw_in", "corner_kick", "goal_kick", "free_kick"].includes(e.reason)) {
           this.showFeedback(e.reason.replace("_", " ").toUpperCase());
         }

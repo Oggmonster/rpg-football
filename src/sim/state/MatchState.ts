@@ -72,6 +72,7 @@ export interface BallState {
   targetPos: Vec2 | null;
   carrierId: string | null;
   lastTouchTeam: TeamId;
+  carrierProtectedUntilMs: number;
 }
 
 export interface PossessionState {
