@@ -1,10 +1,12 @@
 ﻿import { CardCatalog } from "./cards/CardCatalog";
 import { CardResolver, type CardInput } from "./cards/CardResolver";
 import type { CardDef } from "./cards/types";
-import { DECK_SIZE, HAND_SIZE, MATCH_DURATION_MS } from "./config/MatchConfig";
+import { DECK_SIZE, HAND_SIZE } from "./config/MatchConfig";
 import type { SimEvent } from "./events/SimEvent";
 import { RNG } from "./math/RNG";
 import { shuffleInPlace } from "./math/shuffle";
+import { createInitialMatchState } from "./state/createInitialMatchState";
+import { serializeMatchState } from "./state/serializeMatchState";
 import type { DeckKind, DeckState, HandState, MatchState, TeamId } from "./state/MatchState";
 
 type CatalogJson = { cards: CardDef[] };
@@ -34,27 +36,11 @@ export class MatchSim {
     shuffleInPlace(attackDeckIds, rng);
     shuffleInPlace(defenseDeckIds, rng);
 
-    const mkDeck = (ids: string[]): DeckState => ({ draw: [...ids] });
-    const mkHand = (): HandState => ({ cards: [] });
-
-    const mkTeam = (id: TeamId) => ({
-      id,
-      deckAttack: mkDeck(attackDeckIds),
-      deckDefense: mkDeck(defenseDeckIds),
-      handAttack: mkHand(),
-      handDefense: mkHand(),
-      cooldowns: {},
-    });
-
-    const state: MatchState = {
-      timeMs: 0,
-      possession: "HOME",
+    const state = createInitialMatchState({
       rngSeed: args.rngSeed,
-      teams: {
-        HOME: mkTeam("HOME"),
-        AWAY: mkTeam("AWAY"),
-      },
-    };
+      homeDecks: { attack: attackDeckIds, defense: defenseDeckIds },
+      awayDecks: { attack: attackDeckIds, defense: defenseDeckIds },
+    });
 
     const sim = new MatchSim(state, attack, defense);
 
@@ -67,7 +53,13 @@ export class MatchSim {
   }
 
   step(dtMs: number) {
-    this.state.timeMs = Math.min(this.state.timeMs + dtMs, MATCH_DURATION_MS);
+    this.state.timeMs = Math.min(this.state.timeMs + dtMs, this.state.durationMs);
+    if (this.state.phase === "KICKOFF" && this.state.timeMs > 0) {
+      this.state.phase = "LIVE";
+    }
+    if (this.state.timeMs >= this.state.durationMs) {
+      this.state.phase = "ENDED";
+    }
 
     for (const team of Object.values(this.state.teams)) {
       for (const [id, cd] of Object.entries(team.cooldowns)) {
@@ -77,17 +69,20 @@ export class MatchSim {
   }
 
   togglePossession() {
-    this.state.possession = this.state.possession === "HOME" ? "AWAY" : "HOME";
+    const next = this.getActiveTeam() === "HOME" ? "AWAY" : "HOME";
+    this.state.possession.team = next;
+    this.state.possession.lastTouchTeam = next;
+    this.state.ball.lastTouchTeam = next;
     this.eventQueue.push({
       type: "possession_changed",
       atMs: this.state.timeMs,
-      team: this.state.possession,
+      team: next,
       deck: this.getActiveDeckKind(),
     });
   }
 
   getActiveTeam(): TeamId {
-    return this.state.possession;
+    return this.state.possession.team === "NEUTRAL" ? this.state.possession.lastTouchTeam : this.state.possession.team;
   }
 
   getActiveDeckKind(): DeckKind {
@@ -128,6 +123,10 @@ export class MatchSim {
     const events = [...this.eventQueue];
     this.eventQueue.length = 0;
     return events;
+  }
+
+  getStateSnapshot(): string {
+    return serializeMatchState(this.state);
   }
 
   private drawUpTo(deck: DeckState, hand: HandState, target: number) {

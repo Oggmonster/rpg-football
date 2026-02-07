@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "rpg-football",
   "private": true,
   "version": "0.0.0",
@@ -6,13 +6,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "eslint": "^10.0.0",
     "prettier": "^3.8.1",
     "typescript": "~5.9.3",
-    "vite": "^7.2.4"
+    "vite": "^7.2.4",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "phaser": "^3.90.0"
