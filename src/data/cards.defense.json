@@ -1,19 +1,22 @@
 ﻿{
   "cards": [
-    { "id": "DEF_TACKLE", "name": "Tackle", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1800 },
-    { "id": "DEF_TACKLE2", "name": "Tackle+", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1600 },
-    { "id": "DEF_PRESS", "name": "Press", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2400 },
-    { "id": "DEF_PRESS2", "name": "Press+", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2200 },
-    { "id": "DEF_COVER", "name": "Cover", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1400 },
-    { "id": "DEF_COVER2", "name": "Cover+", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1300 },
-    { "id": "DEF_INTERCEPT", "name": "Intercept", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 2000 },
-    { "id": "DEF_INTERCEPT2", "name": "Intercept+", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 1800 },
-    { "id": "DEF_MARK", "name": "Mark", "deck": "DEFENSE", "type": "MARK", "cooldownMs": 2600 },
-    { "id": "DEF_MARK2", "name": "Mark+", "deck": "DEFENSE", "type": "MARK", "cooldownMs": 2400 },
-    { "id": "DEF_BLOCK", "name": "Block", "deck": "DEFENSE", "type": "BLOCK", "cooldownMs": 2200 },
-    { "id": "DEF_BLOCK2", "name": "Block+", "deck": "DEFENSE", "type": "BLOCK", "cooldownMs": 2000 },
-    { "id": "DEF_DOUBLE", "name": "Double Team", "deck": "DEFENSE", "type": "DOUBLE_TEAM", "cooldownMs": 3000 },
-    { "id": "DEF_DOUBLE2", "name": "Double Team+", "deck": "DEFENSE", "type": "DOUBLE_TEAM", "cooldownMs": 2800 },
-    { "id": "DEF_RUSH_GK", "name": "Rush Keeper", "deck": "DEFENSE", "type": "RUSH_KEEPER", "cooldownMs": 5000 }
+    { "id": "DEF_TACKLE_1", "name": "Tackle", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1800 },
+    { "id": "DEF_TACKLE_2", "name": "Tackle+", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1700 },
+    { "id": "DEF_TACKLE_3", "name": "Tackle++", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1650 },
+    { "id": "DEF_TACKLE_4", "name": "Tackle III", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1600 },
+    { "id": "DEF_TACKLE_5", "name": "Tackle IV", "deck": "DEFENSE", "type": "TACKLE", "cooldownMs": 1550 },
+
+    { "id": "DEF_PRESS_1", "name": "Press", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2400 },
+    { "id": "DEF_PRESS_2", "name": "Press+", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2300 },
+    { "id": "DEF_PRESS_3", "name": "Press++", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2200 },
+    { "id": "DEF_PRESS_4", "name": "Press III", "deck": "DEFENSE", "type": "PRESS", "cooldownMs": 2100 },
+
+    { "id": "DEF_COVER_1", "name": "Cover", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1500 },
+    { "id": "DEF_COVER_2", "name": "Cover+", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1400 },
+    { "id": "DEF_COVER_3", "name": "Cover++", "deck": "DEFENSE", "type": "COVER", "cooldownMs": 1300 },
+
+    { "id": "DEF_INTERCEPT_1", "name": "Intercept", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 2000 },
+    { "id": "DEF_INTERCEPT_2", "name": "Intercept+", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 1900 },
+    { "id": "DEF_INTERCEPT_3", "name": "Intercept++", "deck": "DEFENSE", "type": "INTERCEPT", "cooldownMs": 1800 }
   ]
 }

@@ -123,6 +123,7 @@ function createTeamState(id: TeamId, decks: InitialDecks, playerIds: string[]): 
     handAttack: createHand(),
     handDefense: createHand(),
     cooldowns: {},
+    lockoutMs: 0,
     playerIds,
     tactical: {
       mentality: "BALANCED",

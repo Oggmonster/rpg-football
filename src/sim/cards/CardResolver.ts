@@ -1,5 +1,7 @@
-﻿import type { DeckKind, MatchState, TeamId } from "../state/MatchState";
+﻿import { CARD_LOCKOUT_MS } from "../config/MatchConfig";
+import type { DeckKind, MatchState, TeamId } from "../state/MatchState";
 import type { CardCatalog } from "./CardCatalog";
+import type { CardDef } from "./types";
 
 export interface CardInput {
   direction?: { x: number; y: number };
@@ -15,24 +17,41 @@ export class CardResolver {
     this.catalogDefense = catalogDefense;
   }
 
-  canPlay(match: MatchState, team: TeamId, cardId: string): boolean {
+  tryPlay(match: MatchState, team: TeamId, cardId: string, expectedDeck: DeckKind): CardDef | null {
+    const card = this.findCard(cardId);
+    if (!card) return null;
+    if (card.deck !== expectedDeck) return null;
+    if (!this.canPlay(match, team, card)) return null;
+
     const t = match.teams[team];
-    const cd = t.cooldowns[cardId] ?? 0;
-    return cd <= 0;
+    t.cooldowns[cardId] = card.cooldownMs;
+    t.lockoutMs = CARD_LOCKOUT_MS;
+
+    return card;
   }
 
-  play(match: MatchState, team: TeamId, cardId: string, _input: CardInput): boolean {
-    const card = this.findCard(cardId);
-    if (!card) return false;
-    if (!this.canPlay(match, team, cardId)) return false;
+  private canPlay(match: MatchState, team: TeamId, card: CardDef): boolean {
+    const t = match.teams[team];
+    const cd = t.cooldowns[card.id] ?? 0;
+    if (cd > 0) return false;
+    if (t.lockoutMs > 0) return false;
 
-    match.teams[team].cooldowns[cardId] = card.cooldownMs;
-    return true;
+    const teamHasBall = match.possession.team === team;
+    if (card.deck === "ATTACK") {
+      if (!teamHasBall) return false;
+      return this.validateAttackContext(card.type);
+    }
+
+    if (teamHasBall) return false;
+    return this.validateDefenseContext(card.type);
   }
 
-  getDeckKind(cardId: string): DeckKind | null {
-    const card = this.findCard(cardId);
-    return card?.deck ?? null;
+  private validateAttackContext(type: string): boolean {
+    return ["PASS", "THROUGH_PASS", "DRIBBLE", "RUSH", "SHOOT"].includes(type);
+  }
+
+  private validateDefenseContext(type: string): boolean {
+    return ["TACKLE", "PRESS", "COVER", "INTERCEPT"].includes(type);
   }
 
   private findCard(cardId: string) {

@@ -92,6 +92,7 @@ export interface TeamState {
   handAttack: HandState;
   handDefense: HandState;
   cooldowns: Record<string, number>;
+  lockoutMs: number;
   playerIds: string[];
   tactical: TeamTacticalState;
 }

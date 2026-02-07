@@ -1,13 +1,15 @@
 ﻿import { CardCatalog } from "./cards/CardCatalog";
 import { CardResolver, type CardInput } from "./cards/CardResolver";
+import { ATTACK_DECK_CONSTRAINTS, DEFENSE_DECK_CONSTRAINTS } from "./cards/DeckConstraints";
 import type { CardDef } from "./cards/types";
+import { validateDeck } from "./cards/validators/DeckValidator";
 import { DECK_SIZE, HAND_SIZE } from "./config/MatchConfig";
 import type { SimEvent } from "./events/SimEvent";
 import { RNG } from "./math/RNG";
 import { shuffleInPlace } from "./math/shuffle";
 import { createInitialMatchState } from "./state/createInitialMatchState";
 import { serializeMatchState } from "./state/serializeMatchState";
-import type { DeckKind, DeckState, HandState, MatchState, TeamId } from "./state/MatchState";
+import type { DeckKind, DeckState, HandState, IntentState, MatchState, TeamId, Vec2 } from "./state/MatchState";
 import { BallSystem } from "./systems/BallSystem";
 
 type CatalogJson = { cards: CardDef[] };
@@ -17,6 +19,7 @@ export class MatchSim {
   private resolver: CardResolver;
   private ballSystem: BallSystem;
   private eventQueue: SimEvent[] = [];
+  private playerTeam: TeamId = "HOME";
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
@@ -29,6 +32,16 @@ export class MatchSim {
     defenseCatalog: CatalogJson;
     rngSeed: number;
   }): MatchSim {
+    const attackErrors = validateDeck(args.attackCatalog.cards, ATTACK_DECK_CONSTRAINTS);
+    if (attackErrors.length > 0) {
+      throw new Error(`Invalid attack deck: ${attackErrors.join(" ")}`);
+    }
+
+    const defenseErrors = validateDeck(args.defenseCatalog.cards, DEFENSE_DECK_CONSTRAINTS);
+    if (defenseErrors.length > 0) {
+      throw new Error(`Invalid defense deck: ${defenseErrors.join(" ")}`);
+    }
+
     const attack = new CardCatalog(args.attackCatalog.cards);
     const defense = new CardCatalog(args.defenseCatalog.cards);
 
@@ -67,10 +80,13 @@ export class MatchSim {
     }
 
     for (const team of Object.values(this.state.teams)) {
+      team.lockoutMs = Math.max(0, team.lockoutMs - dtMs);
       for (const [id, cd] of Object.entries(team.cooldowns)) {
         team.cooldowns[id] = Math.max(0, cd - dtMs);
       }
     }
+
+    this.expireIntents();
 
     const transitions = this.ballSystem.step(this.state, dtMs);
     for (const t of transitions) {
@@ -103,7 +119,7 @@ export class MatchSim {
   }
 
   togglePossession() {
-    const next = this.getActiveTeam() === "HOME" ? "AWAY" : "HOME";
+    const next = this.state.possession.lastTouchTeam === "HOME" ? "AWAY" : "HOME";
     const ids = this.state.teams[next].playerIds;
     const carrierId = ids.find((id) => this.state.players[id].role !== "GK") ?? ids[0];
     this.state.ball.carrierId = carrierId;
@@ -122,37 +138,47 @@ export class MatchSim {
   }
 
   getActiveTeam(): TeamId {
-    return this.state.possession.team === "NEUTRAL" ? this.state.possession.lastTouchTeam : this.state.possession.team;
+    return this.playerTeam;
   }
 
   getActiveDeckKind(): DeckKind {
-    return "ATTACK";
+    if (this.state.possession.team === this.playerTeam) return "ATTACK";
+    if (this.state.possession.team === "NEUTRAL") {
+      return this.state.possession.lastTouchTeam === this.playerTeam ? "ATTACK" : "DEFENSE";
+    }
+    return "DEFENSE";
   }
 
   getActiveHandCardIds(): string[] {
-    const t = this.state.teams[this.getActiveTeam()];
-    return t.handAttack.cards;
+    const team = this.state.teams[this.playerTeam];
+    return this.getActiveDeckKind() === "ATTACK" ? team.handAttack.cards : team.handDefense.cards;
   }
 
   playCard(cardId: string, input: CardInput): boolean {
-    const team = this.getActiveTeam();
-    const t = this.state.teams[team];
+    const team = this.playerTeam;
+    const activeDeck = this.getActiveDeckKind();
+    const teamState = this.state.teams[team];
+    const hand = activeDeck === "ATTACK" ? teamState.handAttack : teamState.handDefense;
+    const deck = activeDeck === "ATTACK" ? teamState.deckAttack : teamState.deckDefense;
 
-    const hand = t.handAttack;
     const idx = hand.cards.indexOf(cardId);
     if (idx < 0) return false;
 
-    if (!this.resolver.play(this.state, team, cardId, input)) return false;
+    const card = this.resolver.tryPlay(this.state, team, cardId, activeDeck);
+    if (!card) return false;
+
+    this.applyCardEffect(team, card, input);
 
     hand.cards.splice(idx, 1);
-    t.deckAttack.draw.push(cardId);
-    this.drawUpTo(t.deckAttack, hand, HAND_SIZE);
+    deck.draw.push(cardId);
+    this.drawUpTo(deck, hand, HAND_SIZE);
+
     this.eventQueue.push({
       type: "card_played",
       atMs: this.state.timeMs,
       team,
       cardId,
-      deck: "ATTACK",
+      deck: activeDeck,
     });
 
     return true;
@@ -174,6 +200,135 @@ export class MatchSim {
       const top = deck.draw.shift();
       if (!top) break;
       hand.cards.push(top);
+    }
+  }
+
+  private applyCardEffect(team: TeamId, card: CardDef, input: CardInput) {
+    switch (card.type) {
+      case "PASS":
+        this.assignCarrierIntent(team, {
+          type: "PASS_TO_DIRECTION",
+          direction: input.direction,
+          expiresAtMs: this.state.timeMs + 800,
+          priority: 100,
+        });
+        this.ballSystem.passTo(this.state, this.getCardTarget(team, input.direction, 180));
+        break;
+      case "THROUGH_PASS":
+        this.assignCarrierIntent(team, {
+          type: "THROUGH_TO_DIRECTION",
+          direction: input.direction,
+          expiresAtMs: this.state.timeMs + 900,
+          priority: 100,
+        });
+        this.ballSystem.passTo(this.state, this.getCardTarget(team, input.direction, 240));
+        break;
+      case "DRIBBLE":
+        this.assignCarrierIntent(team, {
+          type: "DRIBBLE_TO_DIRECTION",
+          direction: input.direction,
+          expiresAtMs: this.state.timeMs + 600,
+          priority: 100,
+        });
+        break;
+      case "RUSH":
+        this.assignCarrierIntent(team, {
+          type: "CARRY_BURST",
+          direction: input.direction,
+          expiresAtMs: this.state.timeMs + 900,
+          priority: 100,
+        });
+        break;
+      case "SHOOT":
+        this.assignCarrierIntent(team, {
+          type: "SHOOT_TO_DIRECTION",
+          direction: input.direction,
+          expiresAtMs: this.state.timeMs + 500,
+          priority: 100,
+        });
+        this.ballSystem.shootTo(this.state, this.getShotTarget(team));
+        break;
+      case "TACKLE":
+        this.assignNearestDefenderIntent(team, {
+          type: "TACKLE_TARGET",
+          expiresAtMs: this.state.timeMs + 600,
+          priority: 100,
+        });
+        this.ballSystem.forceLoose(this.state);
+        break;
+      case "PRESS":
+        this.assignNearestDefenderIntent(team, {
+          type: "PRESS_ZONE",
+          expiresAtMs: this.state.timeMs + 1200,
+          priority: 90,
+        });
+        break;
+      case "COVER":
+        this.assignNearestDefenderIntent(team, {
+          type: "COVER_ZONE",
+          expiresAtMs: this.state.timeMs + 1500,
+          priority: 90,
+        });
+        break;
+      case "INTERCEPT":
+        this.assignNearestDefenderIntent(team, {
+          type: "INTERCEPT_LANE",
+          expiresAtMs: this.state.timeMs + 1200,
+          priority: 95,
+        });
+        break;
+    }
+  }
+
+  private assignCarrierIntent(team: TeamId, intent: IntentState) {
+    const carrierId = this.state.ball.carrierId;
+    if (!carrierId) return;
+    const carrier = this.state.players[carrierId];
+    if (carrier.teamId !== team) return;
+    carrier.intent = intent;
+  }
+
+  private assignNearestDefenderIntent(team: TeamId, intent: IntentState) {
+    const target = this.getNearestOutfieldPlayer(team);
+    if (!target) return;
+    target.intent = intent;
+  }
+
+  private getNearestOutfieldPlayer(team: TeamId) {
+    let bestId: string | null = null;
+    let bestD = Number.POSITIVE_INFINITY;
+    for (const id of this.state.teams[team].playerIds) {
+      const p = this.state.players[id];
+      if (p.role === "GK") continue;
+      const dx = p.pos.x - this.state.ball.pos.x;
+      const dy = p.pos.y - this.state.ball.pos.y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        bestId = id;
+      }
+    }
+    return bestId ? this.state.players[bestId] : null;
+  }
+
+  private getCardTarget(team: TeamId, direction: Vec2 | undefined, distance: number): Vec2 {
+    const fallback = team === "HOME" ? { x: 1, y: 0 } : { x: -1, y: 0 };
+    const dir = direction ?? fallback;
+    return {
+      x: this.state.ball.pos.x + dir.x * distance,
+      y: this.state.ball.pos.y + dir.y * distance,
+    };
+  }
+
+  private getShotTarget(team: TeamId): Vec2 {
+    return team === "HOME" ? { x: 960, y: 270 } : { x: 0, y: 270 };
+  }
+
+  private expireIntents() {
+    for (const p of Object.values(this.state.players)) {
+      if (p.intent && p.intent.expiresAtMs <= this.state.timeMs) {
+        p.intent = null;
+      }
     }
   }
 }
