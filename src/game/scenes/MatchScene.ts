@@ -9,6 +9,7 @@ import { DirectionPad } from "../ui/DirectionPad";
 import { HandView } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
 import { MatchView } from "../view/MatchView";
+import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
 
 type CatalogJson = { cards: CardDef[] };
 
@@ -27,10 +28,16 @@ export class MatchScene extends Phaser.Scene {
   }
 
   create() {
+    const profile = loadProfile();
+    const selectedAttack = getCardCatalogByDeckIds(profile.attackDeckIds, "ATTACK");
+    const selectedDefense = getCardCatalogByDeckIds(profile.defenseDeckIds, "DEFENSE");
+    const squad = getSelectedSquadPlayers(profile);
+
     this.sim = MatchSim.createFromCatalogs({
-      attackCatalog: attackCards as CatalogJson,
-      defenseCatalog: defenseCards as CatalogJson,
+      attackCatalog: (selectedAttack.cards.length === 15 ? selectedAttack : attackCards) as CatalogJson,
+      defenseCatalog: (selectedDefense.cards.length === 15 ? selectedDefense : defenseCards) as CatalogJson,
       rngSeed: 1337,
+      homeSquad: squad,
     });
 
     this.pitchGfx = this.add.graphics();
@@ -55,7 +62,7 @@ export class MatchScene extends Phaser.Scene {
     this.refreshHand();
 
     this.add
-      .text(16, 44, "P: toggle possession | Click card | Set direction pad", {
+      .text(16, 44, "P: toggle possession | ESC: menu | Click card | Set direction pad", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -65,6 +72,10 @@ export class MatchScene extends Phaser.Scene {
     this.input.keyboard?.on("keydown-P", () => {
       this.sim.togglePossession();
       this.refreshHand();
+    });
+
+    this.input.keyboard?.on("keydown-ESC", () => {
+      this.scene.start("MainMenuScene");
     });
   }
 

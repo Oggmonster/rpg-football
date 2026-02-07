@@ -1,0 +1,16 @@
+﻿{
+  "players": [
+    { "id": "P001", "name": "R. Hale", "role": "GK", "rarity": "Common", "stats": { "pac": 44, "sho": 28, "pas": 56, "dri": 39, "def": 70, "phy": 66 } },
+    { "id": "P002", "name": "M. Torre", "role": "DEF", "rarity": "Common", "stats": { "pac": 57, "sho": 40, "pas": 55, "dri": 48, "def": 67, "phy": 65 } },
+    { "id": "P003", "name": "S. Khan", "role": "DEF", "rarity": "Rare", "stats": { "pac": 60, "sho": 44, "pas": 57, "dri": 52, "def": 70, "phy": 67 } },
+    { "id": "P004", "name": "L. Briggs", "role": "DEF", "rarity": "Common", "stats": { "pac": 56, "sho": 41, "pas": 54, "dri": 49, "def": 65, "phy": 64 } },
+    { "id": "P005", "name": "A. Ciro", "role": "MID", "rarity": "Rare", "stats": { "pac": 63, "sho": 57, "pas": 67, "dri": 65, "def": 56, "phy": 57 } },
+    { "id": "P006", "name": "J. Pike", "role": "MID", "rarity": "Common", "stats": { "pac": 61, "sho": 54, "pas": 63, "dri": 62, "def": 53, "phy": 55 } },
+    { "id": "P007", "name": "N. Reeves", "role": "MID", "rarity": "Epic", "stats": { "pac": 66, "sho": 62, "pas": 70, "dri": 69, "def": 58, "phy": 58 } },
+    { "id": "P008", "name": "D. Osei", "role": "FWD", "rarity": "Rare", "stats": { "pac": 72, "sho": 70, "pas": 55, "dri": 68, "def": 41, "phy": 53 } },
+    { "id": "P009", "name": "F. Moran", "role": "FWD", "rarity": "Common", "stats": { "pac": 68, "sho": 66, "pas": 53, "dri": 64, "def": 39, "phy": 52 } },
+    { "id": "P010", "name": "Y. Voss", "role": "FWD", "rarity": "Epic", "stats": { "pac": 74, "sho": 73, "pas": 59, "dri": 71, "def": 43, "phy": 55 } },
+    { "id": "P011", "name": "C. Duval", "role": "MID", "rarity": "Common", "stats": { "pac": 60, "sho": 53, "pas": 62, "dri": 61, "def": 52, "phy": 54 } },
+    { "id": "P012", "name": "T. Ibarra", "role": "DEF", "rarity": "Rare", "stats": { "pac": 59, "sho": 42, "pas": 56, "dri": 50, "def": 69, "phy": 66 } }
+  ]
+}

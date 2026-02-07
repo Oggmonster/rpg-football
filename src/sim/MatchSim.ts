@@ -9,7 +9,17 @@ import { RNG } from "./math/RNG";
 import { shuffleInPlace } from "./math/shuffle";
 import { createInitialMatchState } from "./state/createInitialMatchState";
 import { serializeMatchState } from "./state/serializeMatchState";
-import type { DeckKind, DeckState, HandState, IntentState, MatchState, TeamId, Vec2 } from "./state/MatchState";
+import type {
+  DeckKind,
+  DeckState,
+  HandState,
+  IntentState,
+  MatchState,
+  PlayerRole,
+  PlayerStats,
+  TeamId,
+  Vec2,
+} from "./state/MatchState";
 import { AISystem } from "./systems/AISystem";
 import { BallSystem } from "./systems/BallSystem";
 import { InterceptSystem } from "./systems/InterceptSystem";
@@ -18,6 +28,12 @@ import { PassSystem } from "./systems/PassSystem";
 import { TackleSystem } from "./systems/TackleSystem";
 
 type CatalogJson = { cards: CardDef[] };
+
+export interface SquadPlayerConfig {
+  id: string;
+  role: PlayerRole;
+  stats: PlayerStats;
+}
 
 export class MatchSim {
   private state: MatchState;
@@ -50,6 +66,7 @@ export class MatchSim {
     attackCatalog: CatalogJson;
     defenseCatalog: CatalogJson;
     rngSeed: number;
+    homeSquad?: SquadPlayerConfig[];
   }): MatchSim {
     const attackErrors = validateDeck(args.attackCatalog.cards, ATTACK_DECK_CONSTRAINTS);
     if (attackErrors.length > 0) {
@@ -71,11 +88,18 @@ export class MatchSim {
     shuffleInPlace(attackDeckIds, rng);
     shuffleInPlace(defenseDeckIds, rng);
 
+    const teamSize = args.homeSquad && args.homeSquad.length >= 5 ? args.homeSquad.length : undefined;
+
     const state = createInitialMatchState({
       rngSeed: args.rngSeed,
+      teamSize,
       homeDecks: { attack: attackDeckIds, defense: defenseDeckIds },
       awayDecks: { attack: attackDeckIds, defense: defenseDeckIds },
     });
+
+    if (args.homeSquad && args.homeSquad.length === state.teamSize) {
+      MatchSim.applyHomeSquad(state, args.homeSquad);
+    }
 
     const sim = new MatchSim(state, attack, defense);
 
@@ -424,6 +448,21 @@ export class MatchSim {
       }
     }
   }
+
+  private static applyHomeSquad(state: MatchState, squad: SquadPlayerConfig[]) {
+    const homeIds = state.teams.HOME.playerIds;
+    for (let i = 0; i < homeIds.length; i++) {
+      const player = state.players[homeIds[i]];
+      const chosen = squad[i];
+      if (!chosen) continue;
+      player.role = chosen.role;
+      player.stats = { ...chosen.stats };
+    }
+
+    const kickoffCarrierId = homeIds.find((id) => state.players[id].role !== "GK") ?? homeIds[0];
+    const carrier = state.players[kickoffCarrierId];
+    state.ball.carrierId = kickoffCarrierId;
+    state.ball.pos = { x: carrier.pos.x, y: carrier.pos.y };
+    state.ball.lastTouchTeam = "HOME";
+  }
 }
-
-
