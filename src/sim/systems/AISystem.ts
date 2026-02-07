@@ -1,4 +1,5 @@
 ﻿import { TUNING } from "../config/TuningConfig";
+import { GOAL_LINE_LEFT_X, GOAL_LINE_RIGHT_X, PITCH_CENTER_X, PITCH_CENTER_Y } from "../config/PitchConfig";
 import type { MatchState, TeamId, Vec2 } from "../state/MatchState";
 import { BallSystem } from "./BallSystem";
 import { PassSystem } from "./PassSystem";
@@ -103,8 +104,8 @@ export class AISystem {
       .map((id) => state.players[id])
       .filter((p) => p.role !== "GK")
       .sort((a, b) => {
-        const aDanger = attackingTeam === "HOME" ? a.pos.x : 960 - a.pos.x;
-        const bDanger = attackingTeam === "HOME" ? b.pos.x : 960 - b.pos.x;
+        const aDanger = attackingTeam === "HOME" ? a.pos.x : PITCH_CENTER_X * 2 - a.pos.x;
+        const bDanger = attackingTeam === "HOME" ? b.pos.x : PITCH_CENTER_X * 2 - b.pos.x;
         return bDanger - aDanger;
       })
       .slice(0, 2);
@@ -169,7 +170,7 @@ export class AISystem {
 
     const team = carrier.teamId;
     const oppTeam: TeamId = team === "HOME" ? "AWAY" : "HOME";
-    const goal = team === "HOME" ? { x: 960, y: 270 } : { x: 0, y: 270 };
+    const goal = team === "HOME" ? { x: GOAL_LINE_RIGHT_X, y: PITCH_CENTER_Y } : { x: GOAL_LINE_LEFT_X, y: PITCH_CENTER_Y };
 
     const shotDist = dist(carrier.pos, goal);
     const nearestThreat = Math.min(

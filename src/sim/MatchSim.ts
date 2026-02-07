@@ -4,6 +4,15 @@ import { ATTACK_DECK_CONSTRAINTS, DEFENSE_DECK_CONSTRAINTS } from "./cards/DeckC
 import type { CardDef } from "./cards/types";
 import { validateDeck } from "./cards/validators/DeckValidator";
 import { DECK_SIZE, HAND_SIZE, SQUAD_SIZE } from "./config/MatchConfig";
+import {
+  GOAL_LINE_LEFT_X,
+  GOAL_LINE_RIGHT_X,
+  PENALTY_BOX_BOTTOM,
+  PENALTY_BOX_TOP,
+  PITCH_CENTER_Y,
+  PITCH_LEFT,
+  PITCH_RIGHT,
+} from "./config/PitchConfig";
 import { compactStateFrame, type SimDebugFrame, type SimDebugLog } from "./debug/SimDebugLog";
 import type { SimEvent } from "./events/SimEvent";
 import { RNG } from "./math/RNG";
@@ -490,9 +499,9 @@ export class MatchSim {
       const oppSide = this.pickBestTeammate(team, carrier.id, 80, 420, false, true);
       if (oppSide) target = { x: oppSide.pos.x, y: oppSide.pos.y };
     } else {
-      const boxCenterX = team === "HOME" ? 850 : 110;
+      const boxCenterX = team === "HOME" ? GOAL_LINE_RIGHT_X - 110 : GOAL_LINE_LEFT_X + 110;
       const boxMate = this.pickBestTeammate(team, carrier.id, 80, 380, true, false, true);
-      target = boxMate ? { x: boxMate.pos.x, y: boxMate.pos.y } : { x: boxCenterX, y: 270 };
+      target = boxMate ? { x: boxMate.pos.x, y: boxMate.pos.y } : { x: boxCenterX, y: PITCH_CENTER_Y };
     }
 
     if (!target) return;
@@ -546,10 +555,10 @@ export class MatchSim {
       return;
     }
 
-    const betterX = team === "HOME" ? Math.min(840, carrier.pos.x + 90) : Math.max(120, carrier.pos.x - 90);
+    const betterX = team === "HOME" ? Math.min(PITCH_RIGHT - 90, carrier.pos.x + 90) : Math.max(PITCH_LEFT + 90, carrier.pos.x - 90);
     carrier.intent = {
       type: "CARRY_BURST",
-      targetPos: { x: betterX, y: 270 + (carrier.pos.y - 270) * 0.45 },
+      targetPos: { x: betterX, y: PITCH_CENTER_Y + (carrier.pos.y - PITCH_CENTER_Y) * 0.45 },
       expiresAtMs: this.state.timeMs + 800,
       priority: 100,
     };
@@ -611,7 +620,7 @@ export class MatchSim {
   }
 
   private getShotTarget(team: TeamId): Vec2 {
-    return team === "HOME" ? { x: 960, y: 270 } : { x: 0, y: 270 };
+    return team === "HOME" ? { x: GOAL_LINE_RIGHT_X, y: PITCH_CENTER_Y } : { x: GOAL_LINE_LEFT_X, y: PITCH_CENTER_Y };
   }
 
   private getCarrierForTeam(team: TeamId) {
@@ -641,8 +650,8 @@ export class MatchSim {
       if (d < minDist || d > maxDist) continue;
 
       const forward = team === "HOME" ? p.pos.x - from.pos.x : from.pos.x - p.pos.x;
-      const lane = 1 - Math.min(1, Math.abs(p.pos.y - 270) / 210);
-      const wide = Math.min(1, Math.abs(p.pos.y - 270) / 210);
+      const lane = 1 - Math.min(1, Math.abs(p.pos.y - PITCH_CENTER_Y) / 280);
+      const wide = Math.min(1, Math.abs(p.pos.y - PITCH_CENTER_Y) / 280);
       const boxBonus = preferBox && this.isInOppPenaltyArea(p.pos, team) ? 0.7 : 0;
       const score =
         forward * (preferForward ? 1.2 : 0.55) +
@@ -670,8 +679,8 @@ export class MatchSim {
     for (const a of angles) {
       const dir = baseDir + a;
       const target = {
-        x: Math.max(40, Math.min(920, from.x + Math.cos(dir) * distance)),
-        y: Math.max(80, Math.min(460, from.y + Math.sin(dir) * distance)),
+        x: Math.max(PITCH_LEFT + 16, Math.min(PITCH_RIGHT - 16, from.x + Math.cos(dir) * distance)),
+        y: Math.max(PENALTY_BOX_TOP - 70, Math.min(PENALTY_BOX_BOTTOM + 70, from.y + Math.sin(dir) * distance)),
       };
 
       let minOppDist = Number.POSITIVE_INFINITY;
@@ -693,9 +702,9 @@ export class MatchSim {
   }
 
   private isInOppPenaltyArea(pos: Vec2, team: TeamId) {
-    if (pos.y < 160 || pos.y > 380) return false;
-    if (team === "HOME") return pos.x >= 786;
-    return pos.x <= 174;
+    if (pos.y < PENALTY_BOX_TOP || pos.y > PENALTY_BOX_BOTTOM) return false;
+    if (team === "HOME") return pos.x >= PITCH_RIGHT - 230;
+    return pos.x <= PITCH_LEFT + 230;
   }
 
   private expireIntents() {

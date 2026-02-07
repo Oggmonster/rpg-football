@@ -1,4 +1,15 @@
 ﻿import { TUNING } from "../config/TuningConfig";
+import {
+  GOAL_LINE_LEFT_X,
+  GOAL_LINE_RIGHT_X,
+  PENALTY_BOX_BOTTOM,
+  PENALTY_BOX_TOP,
+  PITCH_BOTTOM,
+  PITCH_CENTER_Y,
+  PITCH_LEFT,
+  PITCH_RIGHT,
+  PITCH_TOP,
+} from "../config/PitchConfig";
 import { RNG } from "../math/RNG";
 import type { BallSimState, MatchState, TeamId, Vec2 } from "../state/MatchState";
 
@@ -18,10 +29,10 @@ const ALLOWED: Record<BallSimState, BallSimState[]> = {
   GOAL: ["KICKOFF"],
 };
 
-const PITCH_MIN_X = 24;
-const PITCH_MAX_X = 936;
-const PITCH_MIN_Y = 60;
-const PITCH_MAX_Y = 480;
+const PITCH_MIN_X = PITCH_LEFT;
+const PITCH_MAX_X = PITCH_RIGHT;
+const PITCH_MIN_Y = PITCH_TOP;
+const PITCH_MAX_Y = PITCH_BOTTOM;
 
 function distance(a: Vec2, b: Vec2): number {
   const dx = a.x - b.x;
@@ -79,7 +90,7 @@ export class BallSystem {
           if (this.tryKeeperSave(state, out)) {
             break;
           }
-          const goal = this.goalTeamAtX(state.ball.pos.x);
+          const goal = this.goalTeamAtX(state.ball.pos.x, state.ball.pos.y);
           if (goal) {
             this.tryTransition(state, "GOAL", "shot_goal", out);
             state.score[goal] += 1;
@@ -240,7 +251,7 @@ export class BallSystem {
     if (!keeperId) return false;
 
     const gk = state.players[keeperId];
-    const nearGoalX = defendingTeam === "HOME" ? state.ball.pos.x < 180 : state.ball.pos.x > 780;
+    const nearGoalX = defendingTeam === "HOME" ? state.ball.pos.x < PITCH_LEFT + 220 : state.ball.pos.x > PITCH_RIGHT - 220;
     if (!nearGoalX) return false;
 
     const d = distance(gk.pos, state.ball.pos);
@@ -290,7 +301,7 @@ export class BallSystem {
         return {
           kind: "corner_kick",
           team: "AWAY" as TeamId,
-          pos: { x: PITCH_MIN_X + 8, y: y < 270 ? PITCH_MIN_Y + 8 : PITCH_MAX_Y - 8 },
+          pos: { x: PITCH_MIN_X + 8, y: y < PITCH_CENTER_Y ? PITCH_MIN_Y + 8 : PITCH_MAX_Y - 8 },
           preferKeeper: false,
           from,
         };
@@ -298,7 +309,7 @@ export class BallSystem {
       return {
         kind: "goal_kick",
         team: "HOME" as TeamId,
-        pos: { x: PITCH_MIN_X + 54, y: y < 270 ? 220 : 320 },
+        pos: { x: PITCH_MIN_X + 72, y: y < PITCH_CENTER_Y ? PITCH_CENTER_Y - 80 : PITCH_CENTER_Y + 80 },
         preferKeeper: true,
         from,
       };
@@ -309,7 +320,7 @@ export class BallSystem {
         return {
           kind: "corner_kick",
           team: "HOME" as TeamId,
-          pos: { x: PITCH_MAX_X - 8, y: y < 270 ? PITCH_MIN_Y + 8 : PITCH_MAX_Y - 8 },
+          pos: { x: PITCH_MAX_X - 8, y: y < PITCH_CENTER_Y ? PITCH_MIN_Y + 8 : PITCH_MAX_Y - 8 },
           preferKeeper: false,
           from,
         };
@@ -317,7 +328,7 @@ export class BallSystem {
       return {
         kind: "goal_kick",
         team: "AWAY" as TeamId,
-        pos: { x: PITCH_MAX_X - 54, y: y < 270 ? 220 : 320 },
+        pos: { x: PITCH_MAX_X - 72, y: y < PITCH_CENTER_Y ? PITCH_CENTER_Y - 80 : PITCH_CENTER_Y + 80 },
         preferKeeper: true,
         from,
       };
@@ -408,9 +419,11 @@ export class BallSystem {
     }
   }
 
-  private goalTeamAtX(x: number): TeamId | null {
-    if (x <= 40 - TUNING.goalLineTolerancePx) return "AWAY";
-    if (x >= 920 + TUNING.goalLineTolerancePx) return "HOME";
+  private goalTeamAtX(x: number, y: number): TeamId | null {
+    const insideGoalMouth = y >= PENALTY_BOX_TOP && y <= PENALTY_BOX_BOTTOM;
+    if (!insideGoalMouth) return null;
+    if (x <= GOAL_LINE_LEFT_X - TUNING.goalLineTolerancePx) return "AWAY";
+    if (x >= GOAL_LINE_RIGHT_X + TUNING.goalLineTolerancePx) return "HOME";
     return null;
   }
 }

@@ -2,6 +2,16 @@
 import attackCards from "../../data/cards.attack.json";
 import defenseCards from "../../data/cards.defense.json";
 import { HAND_SIZE } from "../../sim/config/MatchConfig";
+import {
+  PENALTY_BOX_DEPTH,
+  PENALTY_BOX_HEIGHT,
+  PITCH_HEIGHT,
+  PITCH_LEFT,
+  PITCH_TOP,
+  PITCH_WIDTH,
+  WORLD_HEIGHT,
+  WORLD_WIDTH,
+} from "../../sim/config/PitchConfig";
 import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
 import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
@@ -26,6 +36,7 @@ export class MatchScene extends Phaser.Scene {
   private simAccumulatorMs = 0;
   private feedbackUntilMs = 0;
   private overlayVisible = false;
+  private helpText!: Phaser.GameObjects.Text;
 
   constructor() {
     super("MatchScene");
@@ -86,7 +97,7 @@ export class MatchScene extends Phaser.Scene {
 
     this.refreshHand();
 
-    this.add
+    this.helpText = this.add
       .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card", {
         fontFamily: "monospace",
         fontSize: "12px",
@@ -107,6 +118,11 @@ export class MatchScene extends Phaser.Scene {
       this.overlayVisible = !this.overlayVisible;
       this.perf.setVisible(this.overlayVisible);
     });
+
+    this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    this.pinUiToCamera();
+    const initialState = this.sim.getRenderState();
+    this.centerCameraOn(initialState.ball.pos.x, initialState.ball.pos.y, 0, 0, true);
   }
 
   update(_time: number, delta: number) {
@@ -150,6 +166,8 @@ export class MatchScene extends Phaser.Scene {
         events: events.length,
       });
     }
+
+    this.centerCameraOn(state.ball.pos.x, state.ball.pos.y, state.ball.vel.x, state.ball.vel.y, false);
   }
 
   shutdown() {
@@ -182,13 +200,10 @@ export class MatchScene extends Phaser.Scene {
     const g = this.pitchGfx;
     g.clear();
 
-    const sceneW = this.scale.width;
-    const sceneH = this.scale.height;
-    const margin = 24;
-    const pitchX = margin;
-    const pitchY = 60;
-    const pitchW = sceneW - margin * 2;
-    const pitchH = sceneH - 60 - 160;
+    const pitchX = PITCH_LEFT;
+    const pitchY = PITCH_TOP;
+    const pitchW = PITCH_WIDTH;
+    const pitchH = PITCH_HEIGHT;
 
     g.fillStyle(0x1b6b3b, 1);
     g.fillRect(pitchX, pitchY, pitchW, pitchH);
@@ -207,13 +222,13 @@ export class MatchScene extends Phaser.Scene {
     g.lineTo(pitchX + pitchW / 2, pitchY + pitchH);
     g.strokePath();
 
-    g.strokeCircle(pitchX + pitchW / 2, pitchY + pitchH / 2, 48);
+    g.strokeCircle(pitchX + pitchW / 2, pitchY + pitchH / 2, 92);
 
-    g.strokeRect(pitchX - 6, pitchY + pitchH / 2 - 40, 6, 80);
-    g.strokeRect(pitchX + pitchW, pitchY + pitchH / 2 - 40, 6, 80);
+    g.strokeRect(pitchX - 8, pitchY + pitchH / 2 - 70, 8, 140);
+    g.strokeRect(pitchX + pitchW, pitchY + pitchH / 2 - 70, 8, 140);
 
-    const boxDepth = 150;
-    const boxHeight = 220;
+    const boxDepth = PENALTY_BOX_DEPTH;
+    const boxHeight = PENALTY_BOX_HEIGHT;
     const boxY = pitchY + pitchH / 2 - boxHeight / 2;
     g.strokeRect(pitchX, boxY, boxDepth, boxHeight);
     g.strokeRect(pitchX + pitchW - boxDepth, boxY, boxDepth, boxHeight);
@@ -226,5 +241,58 @@ export class MatchScene extends Phaser.Scene {
       })
       .setAlpha(0.7)
       .setDepth(1);
+  }
+
+  private pinUiToCamera() {
+    this.hud.setScrollFactor(0);
+    this.perf.setScrollFactor(0);
+    this.handView.setScrollFactor(0);
+    this.activePlayerPanel.setScrollFactor(0);
+    this.feedbackText.setScrollFactor(0);
+    this.helpText.setScrollFactor(0);
+  }
+
+  private centerCameraOn(x: number, y: number, vx: number, vy: number, instant: boolean) {
+    const cam = this.cameras.main;
+    const maxX = Math.max(0, WORLD_WIDTH - cam.width);
+    const maxY = Math.max(0, WORLD_HEIGHT - cam.height);
+    const lookAheadTimeSec = 0.24;
+    const lookAheadX = Math.abs(vx) < 20 ? 0 : Phaser.Math.Clamp(vx * lookAheadTimeSec, -140, 140);
+    const lookAheadY = Math.abs(vy) < 20 ? 0 : Phaser.Math.Clamp(vy * lookAheadTimeSec, -90, 90);
+    const desiredX = x + lookAheadX;
+    const desiredY = y + lookAheadY;
+
+    let targetX = cam.scrollX;
+    let targetY = cam.scrollY;
+
+    if (instant) {
+      targetX = desiredX - cam.width / 2;
+      targetY = desiredY - cam.height / 2;
+    } else {
+      const deadZoneW = cam.width * 0.3;
+      const deadZoneH = cam.height * 0.24;
+      const dzLeft = cam.scrollX + (cam.width - deadZoneW) / 2;
+      const dzRight = dzLeft + deadZoneW;
+      const dzTop = cam.scrollY + (cam.height - deadZoneH) / 2;
+      const dzBottom = dzTop + deadZoneH;
+
+      if (desiredX < dzLeft) {
+        targetX = desiredX - (cam.width - deadZoneW) / 2;
+      } else if (desiredX > dzRight) {
+        targetX = desiredX - (cam.width + deadZoneW) / 2;
+      }
+
+      if (desiredY < dzTop) {
+        targetY = desiredY - (cam.height - deadZoneH) / 2;
+      } else if (desiredY > dzBottom) {
+        targetY = desiredY - (cam.height + deadZoneH) / 2;
+      }
+    }
+
+    targetX = Phaser.Math.Clamp(targetX, 0, maxX);
+    targetY = Phaser.Math.Clamp(targetY, 0, maxY);
+    const lerp = instant ? 1 : 0.12;
+    cam.scrollX = Phaser.Math.Linear(cam.scrollX, targetX, lerp);
+    cam.scrollY = Phaser.Math.Linear(cam.scrollY, targetY, lerp);
   }
 }

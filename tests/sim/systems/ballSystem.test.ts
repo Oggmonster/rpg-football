@@ -1,5 +1,6 @@
 ﻿import { describe, expect, test } from "vitest";
 import { DECK_SIZE } from "../../../src/sim/config/MatchConfig";
+import { PITCH_CENTER_Y, PITCH_RIGHT } from "../../../src/sim/config/PitchConfig";
 import { createInitialMatchState } from "../../../src/sim/state/createInitialMatchState";
 import type { MatchState } from "../../../src/sim/state/MatchState";
 import { BallSystem } from "../../../src/sim/systems/BallSystem";
@@ -62,7 +63,7 @@ describe("BallSystem transitions", () => {
       p.pos = { x: 0, y: 0 };
     }
 
-    const shotOk = system.shootTo(state, { x: 1200, y: 270 });
+    const shotOk = system.shootTo(state, { x: PITCH_RIGHT + 200, y: PITCH_CENTER_Y });
     expect(shotOk).toBe(true);
 
     let reachedGoal = false;
@@ -135,9 +136,9 @@ describe("BallSystem transitions", () => {
 
     state.ball.state = "IN_FLIGHT";
     state.ball.carrierId = null;
-    state.ball.pos = { x: 944, y: 260 };
+    state.ball.pos = { x: PITCH_RIGHT + 8, y: PITCH_CENTER_Y - 10 };
     state.ball.vel = { x: 120, y: 0 };
-    state.ball.targetPos = { x: 955, y: 260 };
+    state.ball.targetPos = { x: PITCH_RIGHT + 20, y: PITCH_CENTER_Y - 10 };
     state.ball.lastTouchTeam = "HOME";
 
     const transitions = system.step(state, 16);

@@ -1,4 +1,5 @@
 ﻿import { DEFAULT_TEAM_SIZE, MATCH_DURATION_MS } from "../config/MatchConfig";
+import { PITCH_CENTER_X, PITCH_HEIGHT, PITCH_TOP } from "../config/PitchConfig";
 import { RNG } from "../math/RNG";
 import type {
   DeckState,
@@ -85,7 +86,8 @@ function createPlayer(
 }
 
 function teamSpawnX(teamId: TeamId): number {
-  return teamId === "HOME" ? 260 : 700;
+  const offset = 310;
+  return teamId === "HOME" ? PITCH_CENTER_X - offset : PITCH_CENTER_X + offset;
 }
 
 function teamAdvanceX(teamId: TeamId, role: PlayerRole): number {
@@ -106,7 +108,7 @@ function buildTeamPlayers(
   for (let i = 0; i < teamSize; i++) {
     const role = roleForSlot(i, teamSize);
     const id = `${teamId}_P${String(i + 1).padStart(2, "0")}`;
-    const laneY = 120 + ((i + 1) * 280) / (teamSize + 1);
+    const laneY = PITCH_TOP + ((i + 1) * PITCH_HEIGHT) / (teamSize + 1);
     const y = laneY + rng.int(-10, 10);
     const x = teamAdvanceX(teamId, role) + rng.int(-8, 8);
     players[id] = createPlayer(rng, id, teamId, role, i + 1, x, y);

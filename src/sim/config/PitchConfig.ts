@@ -1,0 +1,20 @@
+export const WORLD_WIDTH = 1800;
+export const WORLD_HEIGHT = 1000;
+
+export const PITCH_LEFT = 80;
+export const PITCH_RIGHT = WORLD_WIDTH - 80;
+export const PITCH_TOP = 120;
+export const PITCH_BOTTOM = WORLD_HEIGHT - 120;
+
+export const PITCH_WIDTH = PITCH_RIGHT - PITCH_LEFT;
+export const PITCH_HEIGHT = PITCH_BOTTOM - PITCH_TOP;
+export const PITCH_CENTER_X = (PITCH_LEFT + PITCH_RIGHT) / 2;
+export const PITCH_CENTER_Y = (PITCH_TOP + PITCH_BOTTOM) / 2;
+
+export const GOAL_LINE_LEFT_X = PITCH_LEFT + 16;
+export const GOAL_LINE_RIGHT_X = PITCH_RIGHT - 16;
+
+export const PENALTY_BOX_DEPTH = 230;
+export const PENALTY_BOX_HEIGHT = 320;
+export const PENALTY_BOX_TOP = PITCH_CENTER_Y - PENALTY_BOX_HEIGHT / 2;
+export const PENALTY_BOX_BOTTOM = PITCH_CENTER_Y + PENALTY_BOX_HEIGHT / 2;

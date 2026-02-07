@@ -1,4 +1,5 @@
 ﻿import { TUNING } from "../config/TuningConfig";
+import { GOAL_LINE_LEFT_X, GOAL_LINE_RIGHT_X } from "../config/PitchConfig";
 import type { MatchState, TeamId, Vec2 } from "../state/MatchState";
 import { BallSystem } from "./BallSystem";
 
@@ -30,7 +31,7 @@ export class PassSystem {
     const teammateIds = state.teams[team].playerIds.filter((id) => id !== carrierId);
     if (teammateIds.length === 0) return false;
 
-    const goalX = team === "HOME" ? 960 : 0;
+    const goalX = team === "HOME" ? GOAL_LINE_RIGHT_X : GOAL_LINE_LEFT_X;
     let bestScore = -Infinity;
     let bestTarget: Vec2 | null = null;
 
