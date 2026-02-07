@@ -12,7 +12,7 @@
 - [ ] Attack/Defense hand swaps with possession
 - [ ] Card cooldowns and lockout behave as expected
 - [ ] Deck builder saves legal 15-card attack and defense decks
-- [ ] Collection saves exactly 7-player squad and Quick Match uses it
+- [ ] Collection saves exactly 11-player squad and Quick Match uses it
 
 ## Performance Validation
 - [ ] F3 overlay reports stable 60 FPS on desktop target hardware

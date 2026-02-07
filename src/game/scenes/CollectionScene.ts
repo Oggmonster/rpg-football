@@ -1,4 +1,5 @@
 ﻿import Phaser from "phaser";
+import { SQUAD_SIZE } from "../../sim/config/MatchConfig";
 import { loadProfile, updateSquad } from "../profile/ProfileStore";
 
 export class CollectionScene extends Phaser.Scene {
@@ -36,11 +37,11 @@ export class CollectionScene extends Phaser.Scene {
       bg.on("pointerdown", () => {
         if (this.selected.has(p.id)) {
           this.selected.delete(p.id);
-        } else if (this.selected.size < 7) {
+        } else if (this.selected.size < SQUAD_SIZE) {
           this.selected.add(p.id);
         }
         bg.setFillStyle(this.selected.has(p.id) ? 0x1e4f3a : 0x1c2a24, 1);
-        this.status.setText(`Selected ${this.selected.size}/7`);
+        this.status.setText(`Selected ${this.selected.size}/${SQUAD_SIZE}`);
       });
 
       this.add.existing(txt);
@@ -52,11 +53,11 @@ export class CollectionScene extends Phaser.Scene {
     this.add.text(300, 490, "Save Squad", { fontFamily: "monospace", fontSize: "15px", color: "#eafff6" }).setOrigin(0.5);
     this.add.text(560, 490, "Back", { fontFamily: "monospace", fontSize: "15px", color: "#eafff6" }).setOrigin(0.5);
 
-    this.status = this.add.text(24, 520, `Selected ${this.selected.size}/7`, { fontFamily: "monospace", fontSize: "13px", color: "#ffd791" });
+    this.status = this.add.text(24, 520, `Selected ${this.selected.size}/${SQUAD_SIZE}`, { fontFamily: "monospace", fontSize: "13px", color: "#ffd791" });
 
     saveBtn.on("pointerdown", () => {
-      if (this.selected.size !== 7) {
-        this.status.setText("Select exactly 7 players.");
+      if (this.selected.size !== SQUAD_SIZE) {
+        this.status.setText(`Select exactly ${SQUAD_SIZE} players.`);
         return;
       }
       updateSquad([...this.selected]);

@@ -1,4 +1,5 @@
 ﻿import Phaser from "phaser";
+import { SQUAD_SIZE } from "../../sim/config/MatchConfig";
 import { loadProfile } from "../profile/ProfileStore";
 
 function addButton(scene: Phaser.Scene, x: number, y: number, label: string, onClick: () => void) {
@@ -33,7 +34,7 @@ export class MainMenuScene extends Phaser.Scene {
       color: "#f0fff6",
     }).setOrigin(0.5, 0.5);
 
-    this.add.text(480, 126, `Squad: ${profile.squadIds.length}/7 | Decks: 15+15`, {
+    this.add.text(480, 126, `Squad: ${profile.squadIds.length}/${SQUAD_SIZE} | Decks: 15+15`, {
       fontFamily: "monospace",
       fontSize: "14px",
       color: "#d5ffea",

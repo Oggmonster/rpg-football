@@ -43,19 +43,30 @@ export class MatchScene extends Phaser.Scene {
       homeSquad: squad,
     });
 
+    const sceneH = this.scale.height;
+    const handX = 16;
+    const handY = sceneH - 140;
+    const handWidth = HAND_SIZE * 120 + (HAND_SIZE - 1) * 10;
+    const directionX = handX + handWidth + 28;
+    const directionY = sceneH - 132;
+
     this.pitchGfx = this.add.graphics();
+    this.pitchGfx.setDepth(0);
     this.drawPitch();
 
     this.matchView = new MatchView(this, this.sim.getRenderState());
 
     this.hud = new Hud(this, 20, 20);
     this.perf = new PerfOverlay(this, 740, 16);
+    this.hud.setDepth(20);
+    this.perf.setDepth(21);
 
-    this.directionPad = new DirectionPad(this, 438, 540 - 132, (dir) => {
+    this.directionPad = new DirectionPad(this, directionX, directionY, (dir) => {
       this.selectedDirection = dir;
     });
+    this.directionPad.setDepth(41);
 
-    this.handView = new HandView(this, 16, 540 - 140, HAND_SIZE, (cardId) => {
+    this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
       const ok = this.sim.playCard(cardId, { direction: this.selectedDirection });
       if (!ok) {
         this.handView.pulseInvalid(cardId);
@@ -63,6 +74,7 @@ export class MatchScene extends Phaser.Scene {
       }
       this.refreshHand();
     });
+    this.handView.setDepth(40);
 
     this.refreshHand();
 
@@ -153,11 +165,13 @@ export class MatchScene extends Phaser.Scene {
     const g = this.pitchGfx;
     g.clear();
 
+    const sceneW = this.scale.width;
+    const sceneH = this.scale.height;
     const margin = 24;
     const pitchX = margin;
     const pitchY = 60;
-    const pitchW = 960 - margin * 2;
-    const pitchH = 540 - 60 - 160;
+    const pitchW = sceneW - margin * 2;
+    const pitchH = sceneH - 60 - 160;
 
     g.fillStyle(0x1b6b3b, 1);
     g.fillRect(pitchX, pitchY, pitchW, pitchH);
@@ -182,11 +196,12 @@ export class MatchScene extends Phaser.Scene {
     g.strokeRect(pitchX + pitchW, pitchY + pitchH / 2 - 40, 6, 80);
 
     this.add
-      .text(pitchX, pitchY - 22, "Pitch (placeholder)", {
+      .text(pitchX + 8, pitchY + 8, "Pitch (placeholder)", {
         fontFamily: "monospace",
-        fontSize: "14px",
+        fontSize: "12px",
         color: "#eafff6",
       })
-      .setAlpha(0.85);
+      .setAlpha(0.7)
+      .setDepth(1);
   }
 }

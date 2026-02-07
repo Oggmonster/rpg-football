@@ -3,7 +3,7 @@ import { CardResolver, type CardInput } from "./cards/CardResolver";
 import { ATTACK_DECK_CONSTRAINTS, DEFENSE_DECK_CONSTRAINTS } from "./cards/DeckConstraints";
 import type { CardDef } from "./cards/types";
 import { validateDeck } from "./cards/validators/DeckValidator";
-import { DECK_SIZE, HAND_SIZE } from "./config/MatchConfig";
+import { DECK_SIZE, HAND_SIZE, SQUAD_SIZE } from "./config/MatchConfig";
 import { compactStateFrame, type SimDebugFrame, type SimDebugLog } from "./debug/SimDebugLog";
 import type { SimEvent } from "./events/SimEvent";
 import { RNG } from "./math/RNG";
@@ -93,7 +93,7 @@ export class MatchSim {
     shuffleInPlace(attackDeckIds, rng);
     shuffleInPlace(defenseDeckIds, rng);
 
-    const teamSize = args.homeSquad && args.homeSquad.length >= 5 ? args.homeSquad.length : undefined;
+    const teamSize = args.homeSquad?.length === SQUAD_SIZE ? SQUAD_SIZE : undefined;
 
     const state = createInitialMatchState({
       rngSeed: args.rngSeed,

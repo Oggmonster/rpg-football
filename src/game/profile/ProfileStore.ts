@@ -1,7 +1,7 @@
 ﻿import attackCatalog from "../../data/cards.attack.json";
 import defenseCatalog from "../../data/cards.defense.json";
 import playersCollection from "../../data/players.collection.json";
-import { DECK_SIZE } from "../../sim/config/MatchConfig";
+import { DECK_SIZE, SQUAD_SIZE } from "../../sim/config/MatchConfig";
 import type { CardDef } from "../../sim/cards/types";
 import type { PlayerRole, PlayerStats } from "../../sim/state/MatchState";
 
@@ -28,9 +28,9 @@ function hasWindowStorage() {
 
 function pickDefaultSquad(collection: CollectionPlayer[]): string[] {
   const gk = collection.find((p) => p.role === "GK");
-  const outfield = collection.filter((p) => p.role !== "GK").slice(0, 6);
+  const outfield = collection.filter((p) => p.role !== "GK").slice(0, SQUAD_SIZE - 1);
   const ids = [gk?.id, ...outfield.map((p) => p.id)].filter(Boolean) as string[];
-  return ids.slice(0, 7);
+  return ids.slice(0, SQUAD_SIZE);
 }
 
 function defaultProfile(): SavedProfile {
@@ -67,8 +67,10 @@ export function loadProfile(): SavedProfile {
     const collection = Array.isArray(parsed.collection) && parsed.collection.length > 0 ? parsed.collection : fallback.collection;
     const attackDeckIds = normalizeDeck(parsed.attackDeckIds ?? [], fallback.attackDeckIds);
     const defenseDeckIds = normalizeDeck(parsed.defenseDeckIds ?? [], fallback.defenseDeckIds);
-    const validSquad = (parsed.squadIds ?? []).filter((id) => collection.some((p) => p.id === id)).slice(0, 7);
-    const squadIds = validSquad.length === 7 ? validSquad : pickDefaultSquad(collection);
+    const validSquad = (parsed.squadIds ?? [])
+      .filter((id) => collection.some((p) => p.id === id))
+      .slice(0, SQUAD_SIZE);
+    const squadIds = validSquad.length === SQUAD_SIZE ? validSquad : pickDefaultSquad(collection);
 
     return { attackDeckIds, defenseDeckIds, collection, squadIds };
   } catch {
@@ -96,7 +98,7 @@ export function updateSquad(nextSquadIds: string[]) {
   const p = loadProfile();
   const updated: SavedProfile = {
     ...p,
-    squadIds: nextSquadIds.slice(0, 7),
+    squadIds: nextSquadIds.slice(0, SQUAD_SIZE),
   };
   saveProfile(updated);
   return updated;
