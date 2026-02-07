@@ -4,6 +4,7 @@ import { ATTACK_DECK_CONSTRAINTS, DEFENSE_DECK_CONSTRAINTS } from "./cards/DeckC
 import type { CardDef } from "./cards/types";
 import { validateDeck } from "./cards/validators/DeckValidator";
 import { DECK_SIZE, HAND_SIZE } from "./config/MatchConfig";
+import { compactStateFrame, type SimDebugFrame, type SimDebugLog } from "./debug/SimDebugLog";
 import type { SimEvent } from "./events/SimEvent";
 import { RNG } from "./math/RNG";
 import { shuffleInPlace } from "./math/shuffle";
@@ -48,6 +49,10 @@ export class MatchSim {
   private playerTeam: TeamId = "HOME";
   private attackCatalogIds: string[];
   private defenseCatalogIds: string[];
+
+  private debugFrames: SimDebugFrame[] = [];
+  private tickCount = 0;
+  private maxDebugFrames = 5000;
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
@@ -112,6 +117,7 @@ export class MatchSim {
   }
 
   step(dtMs: number) {
+    const stepEvents: SimEvent[] = [];
     const prevPossession = this.state.possession.team;
 
     this.state.timeMs = Math.min(this.state.timeMs + dtMs, this.state.durationMs);
@@ -123,6 +129,7 @@ export class MatchSim {
     }
 
     if (this.state.phase === "ENDED") {
+      this.recordDebugFrame(stepEvents);
       return;
     }
 
@@ -134,6 +141,7 @@ export class MatchSim {
         this.state.possession.lastTouchTeam = this.state.flow.restartTeam;
         this.state.flow.restartTeam = null;
       }
+      this.recordDebugFrame(stepEvents);
       return;
     }
 
@@ -153,35 +161,47 @@ export class MatchSim {
 
     const transitions = this.ballSystem.step(this.state, dtMs);
     for (const t of transitions) {
-      this.eventQueue.push({
-        type: "ball_transition",
-        atMs: this.state.timeMs,
-        from: t.from,
-        to: t.to,
-        reason: t.reason,
-      });
+      this.emit(
+        {
+          type: "ball_transition",
+          atMs: this.state.timeMs,
+          from: t.from,
+          to: t.to,
+          reason: t.reason,
+        },
+        stepEvents
+      );
+
       if (t.to === "GOAL") {
         const scoringTeam = this.state.ball.lastTouchTeam;
         this.state.flow.goalResetMsRemaining = 1500;
         this.state.flow.restartTeam = scoringTeam === "HOME" ? "AWAY" : "HOME";
-        this.eventQueue.push({
-          type: "goal_scored",
-          atMs: this.state.timeMs,
-          team: scoringTeam,
-          home: this.state.score.HOME,
-          away: this.state.score.AWAY,
-        });
+        this.emit(
+          {
+            type: "goal_scored",
+            atMs: this.state.timeMs,
+            team: scoringTeam,
+            home: this.state.score.HOME,
+            away: this.state.score.AWAY,
+          },
+          stepEvents
+        );
       }
     }
 
     if (prevPossession !== this.state.possession.team && this.state.possession.team !== "NEUTRAL") {
-      this.eventQueue.push({
-        type: "possession_changed",
-        atMs: this.state.timeMs,
-        team: this.state.possession.team,
-        deck: this.getActiveDeckKind(),
-      });
+      this.emit(
+        {
+          type: "possession_changed",
+          atMs: this.state.timeMs,
+          team: this.state.possession.team,
+          deck: this.getActiveDeckKind(),
+        },
+        stepEvents
+      );
     }
+
+    this.recordDebugFrame(stepEvents);
   }
 
   forceGoal(team: TeamId) {
@@ -193,7 +213,7 @@ export class MatchSim {
     this.state.ball.lastTouchTeam = team;
     this.state.flow.goalResetMsRemaining = 1500;
     this.state.flow.restartTeam = team === "HOME" ? "AWAY" : "HOME";
-    this.eventQueue.push({
+    this.emit({
       type: "goal_scored",
       atMs: this.state.timeMs,
       team,
@@ -225,6 +245,8 @@ export class MatchSim {
     this.drawUpTo(this.state.teams.AWAY.deckDefense, this.state.teams.AWAY.handDefense, HAND_SIZE);
 
     this.eventQueue.length = 0;
+    this.debugFrames.length = 0;
+    this.tickCount = 0;
   }
 
   togglePossession() {
@@ -238,7 +260,7 @@ export class MatchSim {
     this.state.ball.lastTouchTeam = next;
     this.state.possession.team = next;
     this.state.possession.lastTouchTeam = next;
-    this.eventQueue.push({
+    this.emit({
       type: "possession_changed",
       atMs: this.state.timeMs,
       team: next,
@@ -285,7 +307,7 @@ export class MatchSim {
     deck.draw.push(cardId);
     this.drawUpTo(deck, hand, HAND_SIZE);
 
-    this.eventQueue.push({
+    this.emit({
       type: "card_played",
       atMs: this.state.timeMs,
       team,
@@ -309,6 +331,33 @@ export class MatchSim {
 
   getRenderState(): MatchState {
     return this.state;
+  }
+
+  getDebugLog(limit = 800): SimDebugLog {
+    const frames = this.debugFrames.slice(Math.max(0, this.debugFrames.length - limit));
+    return {
+      seed: this.state.rngSeed,
+      frames,
+    };
+  }
+
+  getDebugLogJson(limit = 800): string {
+    return JSON.stringify(this.getDebugLog(limit));
+  }
+
+  private emit(event: SimEvent, stepEvents?: SimEvent[]) {
+    this.eventQueue.push(event);
+    if (stepEvents) {
+      stepEvents.push(event);
+    }
+  }
+
+  private recordDebugFrame(stepEvents: SimEvent[]) {
+    this.tickCount += 1;
+    this.debugFrames.push(compactStateFrame(this.state, this.tickCount, stepEvents));
+    if (this.debugFrames.length > this.maxDebugFrames) {
+      this.debugFrames.shift();
+    }
   }
 
   private drawUpTo(deck: DeckState, hand: HandState, target: number) {

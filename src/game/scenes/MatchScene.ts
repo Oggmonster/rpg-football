@@ -5,11 +5,12 @@ import { HAND_SIZE } from "../../sim/config/MatchConfig";
 import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
 import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
+import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
 import { DirectionPad } from "../ui/DirectionPad";
 import { HandView } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
+import { PerfOverlay } from "../ui/PerfOverlay";
 import { MatchView } from "../view/MatchView";
-import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
 
 type CatalogJson = { cards: CardDef[] };
 
@@ -18,10 +19,12 @@ export class MatchScene extends Phaser.Scene {
   private handView!: HandView;
   private directionPad!: DirectionPad;
   private hud!: Hud;
+  private perf!: PerfOverlay;
   private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
   private simAccumulatorMs = 0;
   private selectedDirection = { x: 1, y: 0 };
+  private overlayVisible = false;
 
   constructor() {
     super("MatchScene");
@@ -46,6 +49,8 @@ export class MatchScene extends Phaser.Scene {
     this.matchView = new MatchView(this, this.sim.getRenderState());
 
     this.hud = new Hud(this, 20, 20);
+    this.perf = new PerfOverlay(this, 740, 16);
+
     this.directionPad = new DirectionPad(this, 438, 540 - 132, (dir) => {
       this.selectedDirection = dir;
     });
@@ -62,7 +67,7 @@ export class MatchScene extends Phaser.Scene {
     this.refreshHand();
 
     this.add
-      .text(16, 44, "P: toggle possession | ESC: menu | Click card | Set direction pad", {
+      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card | Set direction", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -76,6 +81,11 @@ export class MatchScene extends Phaser.Scene {
 
     this.input.keyboard?.on("keydown-ESC", () => {
       this.scene.start("MainMenuScene");
+    });
+
+    this.input.keyboard?.on("keydown-F3", () => {
+      this.overlayVisible = !this.overlayVisible;
+      this.perf.setVisible(this.overlayVisible);
     });
   }
 
@@ -98,6 +108,16 @@ export class MatchScene extends Phaser.Scene {
     const events = this.sim.drainEvents();
     if (events.length > 0) {
       this.refreshHand();
+    }
+
+    if (this.overlayVisible) {
+      const fps = this.game.loop.actualFps;
+      this.perf.setMetrics({
+        fps,
+        frameMs: delta,
+        simSteps: steps,
+        events: events.length,
+      });
     }
   }
 
