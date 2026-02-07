@@ -8,17 +8,20 @@ import { shuffleInPlace } from "./math/shuffle";
 import { createInitialMatchState } from "./state/createInitialMatchState";
 import { serializeMatchState } from "./state/serializeMatchState";
 import type { DeckKind, DeckState, HandState, MatchState, TeamId } from "./state/MatchState";
+import { BallSystem } from "./systems/BallSystem";
 
 type CatalogJson = { cards: CardDef[] };
 
 export class MatchSim {
   private state: MatchState;
   private resolver: CardResolver;
+  private ballSystem: BallSystem;
   private eventQueue: SimEvent[] = [];
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
     this.resolver = new CardResolver(attackCatalog, defenseCatalog);
+    this.ballSystem = new BallSystem(state.rngSeed);
   }
 
   static createFromCatalogs(args: {
@@ -53,6 +56,8 @@ export class MatchSim {
   }
 
   step(dtMs: number) {
+    const prevPossession = this.state.possession.team;
+
     this.state.timeMs = Math.min(this.state.timeMs + dtMs, this.state.durationMs);
     if (this.state.phase === "KICKOFF" && this.state.timeMs > 0) {
       this.state.phase = "LIVE";
@@ -66,13 +71,48 @@ export class MatchSim {
         team.cooldowns[id] = Math.max(0, cd - dtMs);
       }
     }
+
+    const transitions = this.ballSystem.step(this.state, dtMs);
+    for (const t of transitions) {
+      this.eventQueue.push({
+        type: "ball_transition",
+        atMs: this.state.timeMs,
+        from: t.from,
+        to: t.to,
+        reason: t.reason,
+      });
+      if (t.to === "GOAL") {
+        this.eventQueue.push({
+          type: "goal_scored",
+          atMs: this.state.timeMs,
+          team: this.state.ball.lastTouchTeam,
+          home: this.state.score.HOME,
+          away: this.state.score.AWAY,
+        });
+      }
+    }
+
+    if (prevPossession !== this.state.possession.team && this.state.possession.team !== "NEUTRAL") {
+      this.eventQueue.push({
+        type: "possession_changed",
+        atMs: this.state.timeMs,
+        team: this.state.possession.team,
+        deck: this.getActiveDeckKind(),
+      });
+    }
   }
 
   togglePossession() {
     const next = this.getActiveTeam() === "HOME" ? "AWAY" : "HOME";
+    const ids = this.state.teams[next].playerIds;
+    const carrierId = ids.find((id) => this.state.players[id].role !== "GK") ?? ids[0];
+    this.state.ball.carrierId = carrierId;
+    this.state.ball.state = "CARRIED";
+    this.state.ball.vel = { x: 0, y: 0 };
+    this.state.ball.targetPos = null;
+    this.state.ball.lastTouchTeam = next;
     this.state.possession.team = next;
     this.state.possession.lastTouchTeam = next;
-    this.state.ball.lastTouchTeam = next;
     this.eventQueue.push({
       type: "possession_changed",
       atMs: this.state.timeMs,

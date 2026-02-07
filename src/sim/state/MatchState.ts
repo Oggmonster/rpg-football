@@ -69,6 +69,7 @@ export interface BallState {
   state: BallSimState;
   pos: Vec2;
   vel: Vec2;
+  targetPos: Vec2 | null;
   carrierId: string | null;
   lastTouchTeam: TeamId;
 }

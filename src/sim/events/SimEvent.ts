@@ -1,4 +1,4 @@
-import type { DeckKind, TeamId } from "../state/MatchState";
+﻿import type { BallSimState, DeckKind, TeamId } from "../state/MatchState";
 
 export type SimEvent =
   | {
@@ -13,4 +13,18 @@ export type SimEvent =
       team: TeamId;
       cardId: string;
       deck: DeckKind;
+    }
+  | {
+      type: "ball_transition";
+      atMs: number;
+      from: BallSimState;
+      to: BallSimState;
+      reason: string;
+    }
+  | {
+      type: "goal_scored";
+      atMs: number;
+      team: TeamId;
+      home: number;
+      away: number;
     };

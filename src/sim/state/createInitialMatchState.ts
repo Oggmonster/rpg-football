@@ -163,6 +163,7 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
       state: "KICKOFF",
       pos: { x: kickoffCarrier.pos.x, y: kickoffCarrier.pos.y },
       vel: { x: 0, y: 0 },
+      targetPos: null,
       carrierId: kickoffCarrierId,
       lastTouchTeam: "HOME",
     },
