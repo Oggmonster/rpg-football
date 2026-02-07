@@ -5,6 +5,7 @@ import { HAND_SIZE } from "../../sim/config/MatchConfig";
 import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
 import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
+import { MatchView } from "../view/MatchView";
 import { HandView } from "../ui/HandView";
 
 type CatalogJson = { cards: CardDef[] };
@@ -12,6 +13,7 @@ type CatalogJson = { cards: CardDef[] };
 export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
+  private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
   private simAccumulatorMs = 0;
 
@@ -28,6 +30,8 @@ export class MatchScene extends Phaser.Scene {
 
     this.pitchGfx = this.add.graphics();
     this.drawPitch();
+
+    this.matchView = new MatchView(this, this.sim.getRenderState());
 
     this.handView = new HandView(this, 16, 540 - 140, HAND_SIZE, (cardId) => {
       const ok = this.sim.playCard(cardId, { direction: { x: 1, y: 0 } });
@@ -62,10 +66,17 @@ export class MatchScene extends Phaser.Scene {
       steps += 1;
     }
 
+    const alpha = Phaser.Math.Clamp(this.simAccumulatorMs / SIM_TICK_MS, 0, 1);
+    this.matchView.render(this.sim.getRenderState(), alpha);
+
     const events = this.sim.drainEvents();
     if (events.length > 0) {
       this.refreshHand();
     }
+  }
+
+  shutdown() {
+    this.matchView?.destroy();
   }
 
   private refreshHand() {

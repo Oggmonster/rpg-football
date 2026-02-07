@@ -283,6 +283,10 @@ export class MatchSim {
     return serializeMatchState(this.state);
   }
 
+  getRenderState(): MatchState {
+    return this.state;
+  }
+
   private drawUpTo(deck: DeckState, hand: HandState, target: number) {
     while (hand.cards.length < target && deck.draw.length > 0) {
       const top = deck.draw.shift();
@@ -421,3 +425,5 @@ export class MatchSim {
     }
   }
 }
+
+
