@@ -10,7 +10,12 @@ import { shuffleInPlace } from "./math/shuffle";
 import { createInitialMatchState } from "./state/createInitialMatchState";
 import { serializeMatchState } from "./state/serializeMatchState";
 import type { DeckKind, DeckState, HandState, IntentState, MatchState, TeamId, Vec2 } from "./state/MatchState";
+import { AISystem } from "./systems/AISystem";
 import { BallSystem } from "./systems/BallSystem";
+import { InterceptSystem } from "./systems/InterceptSystem";
+import { MovementSystem } from "./systems/MovementSystem";
+import { PassSystem } from "./systems/PassSystem";
+import { TackleSystem } from "./systems/TackleSystem";
 
 type CatalogJson = { cards: CardDef[] };
 
@@ -18,6 +23,11 @@ export class MatchSim {
   private state: MatchState;
   private resolver: CardResolver;
   private ballSystem: BallSystem;
+  private aiSystem: AISystem;
+  private passSystem: PassSystem;
+  private interceptSystem: InterceptSystem;
+  private movementSystem: MovementSystem;
+  private tackleSystem: TackleSystem;
   private eventQueue: SimEvent[] = [];
   private playerTeam: TeamId = "HOME";
 
@@ -25,6 +35,11 @@ export class MatchSim {
     this.state = state;
     this.resolver = new CardResolver(attackCatalog, defenseCatalog);
     this.ballSystem = new BallSystem(state.rngSeed);
+    this.aiSystem = new AISystem();
+    this.passSystem = new PassSystem();
+    this.interceptSystem = new InterceptSystem();
+    this.movementSystem = new MovementSystem();
+    this.tackleSystem = new TackleSystem(state.rngSeed);
   }
 
   static createFromCatalogs(args: {
@@ -87,6 +102,11 @@ export class MatchSim {
     }
 
     this.expireIntents();
+
+    this.aiSystem.step(this.state, this.ballSystem, this.passSystem);
+    this.interceptSystem.step(this.state);
+    this.movementSystem.step(this.state, dtMs);
+    this.tackleSystem.step(this.state, dtMs, this.ballSystem);
 
     const transitions = this.ballSystem.step(this.state, dtMs);
     for (const t of transitions) {
@@ -254,7 +274,7 @@ export class MatchSim {
           expiresAtMs: this.state.timeMs + 600,
           priority: 100,
         });
-        this.ballSystem.forceLoose(this.state);
+        this.tackleSystem.step(this.state, 100, this.ballSystem);
         break;
       case "PRESS":
         this.assignNearestDefenderIntent(team, {
@@ -276,6 +296,7 @@ export class MatchSim {
           expiresAtMs: this.state.timeMs + 1200,
           priority: 95,
         });
+        this.interceptSystem.step(this.state);
         break;
     }
   }
