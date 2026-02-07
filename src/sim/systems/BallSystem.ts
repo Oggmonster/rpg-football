@@ -69,16 +69,29 @@ export class BallSystem {
       case "IN_FLIGHT":
       case "SHOT": {
         state.ball.pos = add(state.ball.pos, scale(state.ball.vel, dt));
-        const goal = this.goalTeamAtX(state.ball.pos.x);
-        if (state.ball.state === "SHOT" && goal) {
-          this.tryTransition(state, "GOAL", "shot_goal", out);
-          state.score[goal] += 1;
-          state.ball.vel = { x: 0, y: 0 };
-          state.ball.targetPos = null;
-          state.ball.carrierId = null;
-        } else {
-          this.tryAutoReceiveOrLoose(state, out);
+
+        if (state.ball.state === "SHOT") {
+          if (this.tryKeeperSave(state, out)) {
+            break;
+          }
+          const goal = this.goalTeamAtX(state.ball.pos.x);
+          if (goal) {
+            this.tryTransition(state, "GOAL", "shot_goal", out);
+            state.score[goal] += 1;
+            state.ball.vel = { x: 0, y: 0 };
+            state.ball.targetPos = null;
+            state.ball.carrierId = null;
+            break;
+          }
+          if (this.isOutOfPlay(state.ball.pos)) {
+            state.ball.vel = { x: 0, y: 0 };
+            state.ball.targetPos = null;
+            this.tryTransition(state, "LOOSE", "shot_miss_out", out);
+            break;
+          }
         }
+
+        this.tryAutoReceiveOrLoose(state, out);
         break;
       }
       case "LOOSE": {
@@ -173,6 +186,38 @@ export class BallSystem {
       state.ball.targetPos = null;
       this.tryTransition(state, "LOOSE", "no_control", out);
     }
+  }
+
+  private tryKeeperSave(state: MatchState, out: BallTransition[]): boolean {
+    const defendingTeam: TeamId = state.ball.lastTouchTeam === "HOME" ? "AWAY" : "HOME";
+    const keeperId = state.teams[defendingTeam].playerIds.find((id) => state.players[id].role === "GK");
+    if (!keeperId) return false;
+
+    const gk = state.players[keeperId];
+    const nearGoalX = defendingTeam === "HOME" ? state.ball.pos.x < 180 : state.ball.pos.x > 780;
+    if (!nearGoalX) return false;
+
+    const d = distance(gk.pos, state.ball.pos);
+    if (d > 42) return false;
+
+    const saveChance = Math.max(0.12, Math.min(0.9, 0.2 + gk.stats.def / 120 + gk.stats.phy / 200));
+    if (this.rng.next() > saveChance) return false;
+
+    this.assignCarrier(state, keeperId);
+    if (this.rng.next() < 0.7) {
+      this.tryTransition(state, "CARRIED", "keeper_save_hold", out);
+    } else {
+      state.ball.carrierId = null;
+      state.ball.vel = { x: 0, y: 0 };
+      this.tryTransition(state, "LOOSE", "keeper_parry", out);
+    }
+    return true;
+  }
+
+  private isOutOfPlay(pos: Vec2): boolean {
+    if (pos.y < 60 || pos.y > 480) return true;
+    if (pos.x < 18 || pos.x > 942) return true;
+    return false;
   }
 
   private findNearestPlayer(state: MatchState, maxRadiusPx: number) {

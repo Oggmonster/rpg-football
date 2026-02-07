@@ -168,5 +168,9 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
       carrierId: kickoffCarrierId,
       lastTouchTeam: "HOME",
     },
+    flow: {
+      goalResetMsRemaining: 0,
+      restartTeam: null,
+    },
   };
 }

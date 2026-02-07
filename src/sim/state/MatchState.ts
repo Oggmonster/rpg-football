@@ -97,6 +97,11 @@ export interface TeamState {
   tactical: TeamTacticalState;
 }
 
+export interface MatchFlowState {
+  goalResetMsRemaining: number;
+  restartTeam: TeamId | null;
+}
+
 export interface MatchState {
   timeMs: number;
   durationMs: number;
@@ -108,4 +113,5 @@ export interface MatchState {
   teams: Record<TeamId, TeamState>;
   players: Record<string, PlayerState>;
   ball: BallState;
+  flow: MatchFlowState;
 }

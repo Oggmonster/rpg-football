@@ -30,6 +30,8 @@ export class MatchSim {
   private tackleSystem: TackleSystem;
   private eventQueue: SimEvent[] = [];
   private playerTeam: TeamId = "HOME";
+  private attackCatalogIds: string[];
+  private defenseCatalogIds: string[];
 
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
@@ -40,6 +42,8 @@ export class MatchSim {
     this.interceptSystem = new InterceptSystem();
     this.movementSystem = new MovementSystem();
     this.tackleSystem = new TackleSystem(state.rngSeed);
+    this.attackCatalogIds = attackCatalog.ids().slice(0, DECK_SIZE);
+    this.defenseCatalogIds = defenseCatalog.ids().slice(0, DECK_SIZE);
   }
 
   static createFromCatalogs(args: {
@@ -94,6 +98,21 @@ export class MatchSim {
       this.state.phase = "ENDED";
     }
 
+    if (this.state.phase === "ENDED") {
+      return;
+    }
+
+    if (this.state.flow.goalResetMsRemaining > 0) {
+      this.state.flow.goalResetMsRemaining = Math.max(0, this.state.flow.goalResetMsRemaining - dtMs);
+      if (this.state.flow.goalResetMsRemaining === 0 && this.state.flow.restartTeam) {
+        this.ballSystem.resetForKickoff(this.state, this.state.flow.restartTeam);
+        this.state.possession.team = this.state.flow.restartTeam;
+        this.state.possession.lastTouchTeam = this.state.flow.restartTeam;
+        this.state.flow.restartTeam = null;
+      }
+      return;
+    }
+
     for (const team of Object.values(this.state.teams)) {
       team.lockoutMs = Math.max(0, team.lockoutMs - dtMs);
       for (const [id, cd] of Object.entries(team.cooldowns)) {
@@ -118,10 +137,13 @@ export class MatchSim {
         reason: t.reason,
       });
       if (t.to === "GOAL") {
+        const scoringTeam = this.state.ball.lastTouchTeam;
+        this.state.flow.goalResetMsRemaining = 1500;
+        this.state.flow.restartTeam = scoringTeam === "HOME" ? "AWAY" : "HOME";
         this.eventQueue.push({
           type: "goal_scored",
           atMs: this.state.timeMs,
-          team: this.state.ball.lastTouchTeam,
+          team: scoringTeam,
           home: this.state.score.HOME,
           away: this.state.score.AWAY,
         });
@@ -136,6 +158,49 @@ export class MatchSim {
         deck: this.getActiveDeckKind(),
       });
     }
+  }
+
+  forceGoal(team: TeamId) {
+    this.state.score[team] += 1;
+    this.state.ball.state = "GOAL";
+    this.state.ball.carrierId = null;
+    this.state.ball.targetPos = null;
+    this.state.ball.vel = { x: 0, y: 0 };
+    this.state.ball.lastTouchTeam = team;
+    this.state.flow.goalResetMsRemaining = 1500;
+    this.state.flow.restartTeam = team === "HOME" ? "AWAY" : "HOME";
+    this.eventQueue.push({
+      type: "goal_scored",
+      atMs: this.state.timeMs,
+      team,
+      home: this.state.score.HOME,
+      away: this.state.score.AWAY,
+    });
+  }
+
+  resetMatch(nextSeed?: number) {
+    const seed = nextSeed ?? this.state.rngSeed + 1;
+    const attackDeckIds = [...this.attackCatalogIds];
+    const defenseDeckIds = [...this.defenseCatalogIds];
+    const rng = new RNG(seed);
+    shuffleInPlace(attackDeckIds, rng);
+    shuffleInPlace(defenseDeckIds, rng);
+
+    this.state = createInitialMatchState({
+      rngSeed: seed,
+      homeDecks: { attack: attackDeckIds, defense: defenseDeckIds },
+      awayDecks: { attack: attackDeckIds, defense: defenseDeckIds },
+    });
+
+    this.ballSystem = new BallSystem(seed);
+    this.tackleSystem = new TackleSystem(seed);
+
+    this.drawUpTo(this.state.teams.HOME.deckAttack, this.state.teams.HOME.handAttack, HAND_SIZE);
+    this.drawUpTo(this.state.teams.HOME.deckDefense, this.state.teams.HOME.handDefense, HAND_SIZE);
+    this.drawUpTo(this.state.teams.AWAY.deckAttack, this.state.teams.AWAY.handAttack, HAND_SIZE);
+    this.drawUpTo(this.state.teams.AWAY.deckDefense, this.state.teams.AWAY.handDefense, HAND_SIZE);
+
+    this.eventQueue.length = 0;
   }
 
   togglePossession() {
@@ -175,6 +240,9 @@ export class MatchSim {
   }
 
   playCard(cardId: string, input: CardInput): boolean {
+    if (this.state.phase === "ENDED") return false;
+    if (this.state.flow.goalResetMsRemaining > 0) return false;
+
     const team = this.playerTeam;
     const activeDeck = this.getActiveDeckKind();
     const teamState = this.state.teams[team];
