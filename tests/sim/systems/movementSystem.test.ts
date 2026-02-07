@@ -23,4 +23,48 @@ describe("MovementSystem", () => {
     const after = state.players[sampleId].pos;
     expect(after.x !== before.x || after.y !== before.y).toBe(true);
   });
+
+  test("ball carrier advances toward opponent goal", () => {
+    const state = createInitialMatchState({
+      rngSeed: 12,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+    const system = new MovementSystem();
+    const carrierId = state.ball.carrierId!;
+    const beforeX = state.players[carrierId].pos.x;
+
+    state.ball.state = "CARRIED";
+    state.possession.team = "HOME";
+    state.possession.lastTouchTeam = "HOME";
+
+    system.step(state, 500);
+
+    expect(state.players[carrierId].pos.x).toBeGreaterThan(beforeX);
+  });
+
+  test("goalkeeper shifts toward ball lane when ball enters own third", () => {
+    const state = createInitialMatchState({
+      rngSeed: 13,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+    const system = new MovementSystem();
+    const homeGkId = state.teams.HOME.playerIds.find((id) => state.players[id].role === "GK")!;
+    const before = { ...state.players[homeGkId].pos };
+
+    state.ball.state = "LOOSE";
+    state.ball.carrierId = null;
+    state.ball.pos = { x: 120, y: 360 };
+    state.ball.vel = { x: 0, y: 0 };
+    state.possession.team = "NEUTRAL";
+
+    system.step(state, 500);
+
+    const after = state.players[homeGkId].pos;
+    const target = { x: 98, y: 307.8 };
+    const beforeDist = Math.hypot(before.x - target.x, before.y - target.y);
+    const afterDist = Math.hypot(after.x - target.x, after.y - target.y);
+    expect(afterDist).toBeLessThan(beforeDist);
+  });
 });

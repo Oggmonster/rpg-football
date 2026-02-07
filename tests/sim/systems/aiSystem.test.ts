@@ -49,4 +49,34 @@ describe("AISystem", () => {
 
     expect(state.players[carrierId].intent).not.toBeNull();
   });
+
+  test("assigns loose-ball chase intent to nearest outfield players", () => {
+    const state = createInitialMatchState({
+      rngSeed: 77,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+
+    state.ball.state = "LOOSE";
+    state.ball.carrierId = null;
+    state.ball.pos = { x: 480, y: 270 };
+    state.ball.targetPos = null;
+    state.possession.team = "NEUTRAL";
+
+    const homeNearest = state.teams.HOME.playerIds
+      .map((id) => state.players[id])
+      .filter((p) => p.role !== "GK")
+      .sort((a, b) => Math.hypot(a.pos.x - 480, a.pos.y - 270) - Math.hypot(b.pos.x - 480, b.pos.y - 270))[0];
+
+    const awayNearest = state.teams.AWAY.playerIds
+      .map((id) => state.players[id])
+      .filter((p) => p.role !== "GK")
+      .sort((a, b) => Math.hypot(a.pos.x - 480, a.pos.y - 270) - Math.hypot(b.pos.x - 480, b.pos.y - 270))[0];
+
+    const ai = new AISystem();
+    ai.step(state, new BallSystem(77), new PassSystem());
+
+    expect(state.players[homeNearest.id].intent?.targetPos).toEqual({ x: 480, y: 270 });
+    expect(state.players[awayNearest.id].intent?.targetPos).toEqual({ x: 480, y: 270 });
+  });
 });

@@ -9,8 +9,90 @@ function dist(a: Vec2, b: Vec2): number {
 
 export class AISystem {
   step(state: MatchState, ballSystem: BallSystem, passSystem: PassSystem) {
+    this.updateTeamTacticalState(state);
+    this.assignBallChaseAndPressure(state);
     this.assignMarks(state);
+    this.assignAttackingSupport(state);
     this.decideBallCarrierAction(state, ballSystem, passSystem);
+  }
+
+  private updateTeamTacticalState(state: MatchState) {
+    const ballX = state.ball.pos.x;
+    const ballSide = (ballX - 480) / 480;
+
+    for (const teamId of ["HOME", "AWAY"] as const) {
+      const inPossession = state.possession.team === teamId;
+      const sideFactor = teamId === "HOME" ? ballSide : -ballSide;
+      const lineHeightBase = inPossession ? 0.56 : 0.45;
+      const pressBase = inPossession ? 0.44 : 0.62;
+
+      state.teams[teamId].tactical.lineHeight = Math.max(0.3, Math.min(0.78, lineHeightBase + sideFactor * 0.14));
+      state.teams[teamId].tactical.pressIntensity = Math.max(0.25, Math.min(0.88, pressBase + sideFactor * 0.12));
+      state.teams[teamId].tactical.mentality = inPossession ? "ATTACKING" : "DEFENSIVE";
+    }
+  }
+
+  private assignBallChaseAndPressure(state: MatchState) {
+    if (state.ball.state === "CARRIED" && state.ball.carrierId) {
+      this.assignCarrierPressure(state);
+      return;
+    }
+
+    const chaseTarget = state.ball.targetPos ?? state.ball.pos;
+    for (const teamId of ["HOME", "AWAY"] as const) {
+      const chaser = this.findNearestOutfielderToPoint(state, teamId, chaseTarget);
+      if (!chaser) continue;
+      this.assignIntentIfFree(chaser.id, state, {
+        type: "PRESS_ZONE",
+        targetPos: { x: chaseTarget.x, y: chaseTarget.y },
+        expiresAtMs: state.timeMs + 320,
+        priority: 88,
+      });
+    }
+  }
+
+  private assignCarrierPressure(state: MatchState) {
+    const carrierId = state.ball.carrierId;
+    if (!carrierId) return;
+
+    const carrier = state.players[carrierId];
+    const defendingTeam: TeamId = carrier.teamId === "HOME" ? "AWAY" : "HOME";
+    const supportTeam: TeamId = carrier.teamId;
+
+    const primary = this.findNearestOutfielderToPoint(state, defendingTeam, carrier.pos);
+    if (primary) {
+      this.assignIntentIfFree(primary.id, state, {
+        type: "TACKLE_TARGET",
+        targetPos: { x: carrier.pos.x, y: carrier.pos.y },
+        targetPlayerId: carrier.id,
+        expiresAtMs: state.timeMs + 280,
+        priority: 92,
+      });
+    }
+
+    const secondary = this.findSecondNearestOutfielderToPoint(state, defendingTeam, carrier.pos, primary?.id ?? null);
+    if (secondary) {
+      const yOffset = secondary.pos.y < carrier.pos.y ? -18 : 18;
+      this.assignIntentIfFree(secondary.id, state, {
+        type: "COVER_ZONE",
+        targetPos: { x: carrier.pos.x + (defendingTeam === "HOME" ? -16 : 16), y: carrier.pos.y + yOffset },
+        targetPlayerId: carrier.id,
+        expiresAtMs: state.timeMs + 500,
+        priority: 80,
+      });
+    }
+
+    const support = this.findNearestOutfielderToPoint(state, supportTeam, carrier.pos, carrier.id);
+    if (support) {
+      const xOffset = supportTeam === "HOME" ? 42 : -42;
+      const yOffset = support.pos.y <= carrier.pos.y ? -24 : 24;
+      this.assignIntentIfFree(support.id, state, {
+        type: "DRIBBLE_TO_DIRECTION",
+        targetPos: { x: carrier.pos.x + xOffset, y: carrier.pos.y + yOffset },
+        expiresAtMs: state.timeMs + 560,
+        priority: 52,
+      });
+    }
   }
 
   private assignMarks(state: MatchState) {
@@ -48,6 +130,35 @@ export class AISystem {
       if (bestDefId) {
         state.players[bestDefId].markTargetId = threat.id;
       }
+    }
+  }
+
+  private assignAttackingSupport(state: MatchState) {
+    if (state.ball.state !== "CARRIED" || !state.ball.carrierId) return;
+
+    const carrier = state.players[state.ball.carrierId];
+    const team = carrier.teamId;
+    const candidateIds = state.teams[team].playerIds
+      .filter((id) => id !== carrier.id && state.players[id].role !== "GK")
+      .sort((a, b) => {
+        const aP = state.players[a];
+        const bP = state.players[b];
+        const aDist = dist(aP.pos, carrier.pos);
+        const bDist = dist(bP.pos, carrier.pos);
+        return aDist - bDist;
+      })
+      .slice(0, 3);
+
+    const xBase = team === "HOME" ? 36 : -36;
+    const yOffsets = [-34, 0, 34];
+    for (let i = 0; i < candidateIds.length; i++) {
+      const p = state.players[candidateIds[i]];
+      this.assignIntentIfFree(p.id, state, {
+        type: "DRIBBLE_TO_DIRECTION",
+        targetPos: { x: carrier.pos.x + xBase * (i === 1 ? 1.4 : 1), y: carrier.pos.y + yOffsets[i] },
+        expiresAtMs: state.timeMs + 420,
+        priority: 50,
+      });
     }
   }
 
@@ -112,5 +223,39 @@ export class AISystem {
       expiresAtMs: state.timeMs + 700,
       priority: 45,
     };
+  }
+
+  private assignIntentIfFree(
+    playerId: string,
+    state: MatchState,
+    intent: NonNullable<MatchState["players"][string]["intent"]>
+  ) {
+    const player = state.players[playerId];
+    if (!player) return;
+    const current = player.intent;
+    if (current && current.expiresAtMs > state.timeMs && current.priority >= intent.priority) {
+      return;
+    }
+    player.intent = intent;
+  }
+
+  private findNearestOutfielderToPoint(state: MatchState, team: TeamId, target: Vec2, excludeId?: string | null) {
+    let best: string | null = null;
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const id of state.teams[team].playerIds) {
+      if (id === excludeId) continue;
+      const p = state.players[id];
+      if (!p || p.role === "GK") continue;
+      const d = dist(p.pos, target);
+      if (d < bestDist) {
+        bestDist = d;
+        best = id;
+      }
+    }
+    return best ? state.players[best] : null;
+  }
+
+  private findSecondNearestOutfielderToPoint(state: MatchState, team: TeamId, target: Vec2, firstId: string | null) {
+    return this.findNearestOutfielderToPoint(state, team, target, firstId);
   }
 }
