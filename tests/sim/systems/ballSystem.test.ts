@@ -187,4 +187,32 @@ describe("BallSystem transitions", () => {
     expect(state.ball.state).toBe("CARRIED");
     expect(state.ball.carrierId).toBe(defenderId);
   });
+
+  test("shot outside goal mouth does not count as goal", () => {
+    const state = makeState(202);
+    const system = new BallSystem(202);
+    system.step(state, 16);
+
+    const homeCarrierId = state.ball.carrierId!;
+    state.players[homeCarrierId].pos = { x: PITCH_LEFT + 220, y: PITCH_TOP + 40 };
+    state.ball.pos = { x: PITCH_LEFT + 224, y: PITCH_TOP + 40 };
+    for (const id of state.teams.AWAY.playerIds) {
+      state.players[id].pos = { x: PITCH_LEFT + 36, y: PITCH_TOP + 20 };
+    }
+
+    const shotOk = system.shootTo(state, { x: PITCH_RIGHT + 160, y: PITCH_TOP + 36 });
+    expect(shotOk).toBe(true);
+
+    let sawGoal = false;
+    for (let i = 0; i < 260; i++) {
+      const t = system.step(state, 16);
+      if (t.some((x) => x.to === "GOAL")) {
+        sawGoal = true;
+        break;
+      }
+    }
+
+    expect(sawGoal).toBe(false);
+    expect(state.score.HOME).toBe(0);
+  });
 });

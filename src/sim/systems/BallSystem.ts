@@ -2,8 +2,6 @@
 import {
   GOAL_LINE_LEFT_X,
   GOAL_LINE_RIGHT_X,
-  PENALTY_BOX_BOTTOM,
-  PENALTY_BOX_TOP,
   PITCH_BOTTOM,
   PITCH_CENTER_Y,
   PITCH_LEFT,
@@ -33,6 +31,7 @@ const PITCH_MIN_X = PITCH_LEFT;
 const PITCH_MAX_X = PITCH_RIGHT;
 const PITCH_MIN_Y = PITCH_TOP;
 const PITCH_MAX_Y = PITCH_BOTTOM;
+const GOAL_MOUTH_HALF_HEIGHT = 70;
 
 function distance(a: Vec2, b: Vec2): number {
   const dx = a.x - b.x;
@@ -116,9 +115,9 @@ export class BallSystem {
           }
           const goal = this.goalTeamAtX(state.ball.pos.x, state.ball.pos.y);
           if (goal) {
+            this.snapBallIntoGoal(state, goal);
             this.tryTransition(state, "GOAL", "shot_goal", out);
             state.score[goal] += 1;
-            state.ball.vel = { x: 0, y: 0 };
             state.ball.targetPos = null;
             state.ball.carrierId = null;
             state.ball.carrierProtectedUntilMs = 0;
@@ -169,6 +168,7 @@ export class BallSystem {
         break;
       }
       case "GOAL": {
+        this.applyGoalNetPhysics(state, dt);
         break;
       }
     }
@@ -269,7 +269,7 @@ export class BallSystem {
     }
 
     if (targetReached || speed < 12) {
-      state.ball.vel = { x: 0, y: 0 };
+      state.ball.vel = this.rolloutVelocityFromFlight(state.ball.vel, state.ball.state === "SHOT");
       state.ball.targetPos = null;
       this.tryTransition(state, "LOOSE", "no_control", out);
     }
@@ -339,9 +339,11 @@ export class BallSystem {
     if (!nearGoalX) return false;
 
     const d = distance(gk.pos, state.ball.pos);
-    if (d > 34) return false;
+    if (d > 44) return false;
 
-    const saveChance = Math.max(0.1, Math.min(0.72, 0.08 + gk.stats.def / 230 + gk.stats.phy / 320));
+    const shotSpeed = Math.hypot(state.ball.vel.x, state.ball.vel.y);
+    const speedPenalty = Math.min(0.18, shotSpeed / 2400);
+    const saveChance = Math.max(0.12, Math.min(0.78, 0.1 + gk.stats.def / 215 + gk.stats.phy / 300 - speedPenalty));
     if (this.rng.next() > saveChance) return false;
 
     this.assignCarrier(state, keeperId);
@@ -349,7 +351,10 @@ export class BallSystem {
       this.tryTransition(state, "CARRIED", "keeper_save_hold", out);
     } else {
       state.ball.carrierId = null;
-      state.ball.vel = { x: 0, y: 0 };
+      const reboundDir = defendingTeam === "HOME" ? 1 : -1;
+      const reboundX = Math.max(70, Math.abs(state.ball.vel.x) * 0.52) * reboundDir;
+      const reboundY = state.ball.vel.y * 0.25 + (this.rng.next() - 0.5) * 26;
+      state.ball.vel = { x: reboundX, y: reboundY };
       state.ball.carrierProtectedUntilMs = 0;
       this.tryTransition(state, "LOOSE", "keeper_parry", out);
     }
@@ -535,10 +540,81 @@ export class BallSystem {
   }
 
   private goalTeamAtX(x: number, y: number): TeamId | null {
-    const insideGoalMouth = y >= PENALTY_BOX_TOP && y <= PENALTY_BOX_BOTTOM;
+    const insideGoalMouth = y >= PITCH_CENTER_Y - GOAL_MOUTH_HALF_HEIGHT && y <= PITCH_CENTER_Y + GOAL_MOUTH_HALF_HEIGHT;
     if (!insideGoalMouth) return null;
     if (x <= GOAL_LINE_LEFT_X - TUNING.goalLineTolerancePx) return "AWAY";
     if (x >= GOAL_LINE_RIGHT_X + TUNING.goalLineTolerancePx) return "HOME";
     return null;
+  }
+
+  private snapBallIntoGoal(state: MatchState, scoringTeam: TeamId) {
+    const towardRight = scoringTeam === "HOME";
+    const insideX = towardRight ? GOAL_LINE_RIGHT_X + 12 : GOAL_LINE_LEFT_X - 12;
+    const insideY = Math.max(
+      PITCH_CENTER_Y - GOAL_MOUTH_HALF_HEIGHT + 4,
+      Math.min(PITCH_CENTER_Y + GOAL_MOUTH_HALF_HEIGHT - 4, state.ball.pos.y)
+    );
+    state.ball.pos = { x: insideX, y: insideY };
+    state.ball.vel = {
+      x: towardRight ? 58 : -58,
+      y: state.ball.vel.y * 0.22,
+    };
+  }
+
+  private rolloutVelocityFromFlight(vel: Vec2, wasShot: boolean): Vec2 {
+    const speed = Math.hypot(vel.x, vel.y);
+    if (speed < 1.5) return { x: 0, y: 0 };
+
+    const carry = wasShot ? 0.64 : 0.5;
+    const dir = normalize(vel);
+    const lateralMagnitude = (this.rng.next() - 0.5) * (wasShot ? 22 : 14);
+    const lateral = { x: -dir.y * lateralMagnitude, y: dir.x * lateralMagnitude };
+    const base = scale(vel, carry);
+    return {
+      x: base.x + lateral.x,
+      y: base.y + lateral.y,
+    };
+  }
+
+  private applyGoalNetPhysics(state: MatchState, dt: number) {
+    state.ball.pos = add(state.ball.pos, scale(state.ball.vel, dt));
+    const damp = Math.max(0.78, 1 - 3.2 * dt);
+    state.ball.vel = scale(state.ball.vel, damp);
+
+    const top = PITCH_CENTER_Y - GOAL_MOUTH_HALF_HEIGHT - 10;
+    const bottom = PITCH_CENTER_Y + GOAL_MOUTH_HALF_HEIGHT + 10;
+    if (state.ball.pos.y < top) {
+      state.ball.pos.y = top;
+      state.ball.vel.y = Math.abs(state.ball.vel.y) * 0.45;
+    } else if (state.ball.pos.y > bottom) {
+      state.ball.pos.y = bottom;
+      state.ball.vel.y = -Math.abs(state.ball.vel.y) * 0.45;
+    }
+
+    if (state.ball.lastTouchTeam === "HOME") {
+      const front = GOAL_LINE_RIGHT_X + 2;
+      const back = GOAL_LINE_RIGHT_X + 24;
+      if (state.ball.pos.x < front) {
+        state.ball.pos.x = front;
+        state.ball.vel.x = Math.abs(state.ball.vel.x) * 0.4;
+      } else if (state.ball.pos.x > back) {
+        state.ball.pos.x = back;
+        state.ball.vel.x = -Math.abs(state.ball.vel.x) * 0.4;
+      }
+    } else {
+      const front = GOAL_LINE_LEFT_X - 2;
+      const back = GOAL_LINE_LEFT_X - 24;
+      if (state.ball.pos.x > front) {
+        state.ball.pos.x = front;
+        state.ball.vel.x = -Math.abs(state.ball.vel.x) * 0.4;
+      } else if (state.ball.pos.x < back) {
+        state.ball.pos.x = back;
+        state.ball.vel.x = Math.abs(state.ball.vel.x) * 0.4;
+      }
+    }
+
+    if (Math.hypot(state.ball.vel.x, state.ball.vel.y) < 5) {
+      state.ball.vel = { x: 0, y: 0 };
+    }
   }
 }

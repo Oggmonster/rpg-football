@@ -131,7 +131,7 @@ export class PlayerView {
       player.role === "GK" ? (player.teamId === "HOME" ? "player_gk_home" : "player_gk_away") : player.teamId === "HOME" ? "player_home" : "player_away";
     const key =
       animState === "run"
-        ? `${prefix}_${Math.floor(this.scene.time.now / 120) % 2 === 0 ? "run_a" : "run_b"}`
+        ? `${prefix}_${Math.floor(this.scene.time.now / 90) % 2 === 0 ? "run_a" : "run_b"}`
         : `${prefix}_${animState}`;
     if (this.sprite.texture.key !== key) {
       this.sprite.setTexture(key);
@@ -162,7 +162,7 @@ export class PlayerView {
   private syncBaseScale() {
     const source = this.sprite.texture.getSourceImage() as { width?: number; height?: number } | undefined;
     const sourceHeight = source?.height ?? this.sprite.height ?? 16;
-    this.baseScale = Phaser.Math.Clamp(18 / Math.max(1, sourceHeight), 0.2, 2);
+    this.baseScale = Phaser.Math.Clamp(21 / Math.max(1, sourceHeight), 0.2, 2);
     this.sprite.setScale(this.baseScale, this.baseScale);
   }
 

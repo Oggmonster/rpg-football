@@ -68,6 +68,32 @@ describe("MovementSystem", () => {
     expect(afterDist).toBeLessThan(beforeDist);
   });
 
+  test("goalkeeper reacts faster to on-target shot lane", () => {
+    const state = createInitialMatchState({
+      rngSeed: 130,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+    const system = new MovementSystem();
+    const homeGkId = state.teams.HOME.playerIds.find((id) => state.players[id].role === "GK")!;
+    const before = { ...state.players[homeGkId].pos };
+
+    state.ball.state = "SHOT";
+    state.ball.lastTouchTeam = "AWAY";
+    state.ball.pos = { x: 190, y: 220 };
+    state.ball.vel = { x: -420, y: -75 };
+    state.ball.carrierId = null;
+
+    system.step(state, 350);
+
+    const after = state.players[homeGkId].pos;
+    const target = { x: 72, y: 203.5 };
+    const beforeDist = Math.hypot(before.x - target.x, before.y - target.y);
+    const afterDist = Math.hypot(after.x - target.x, after.y - target.y);
+    expect(afterDist).toBeLessThan(beforeDist);
+    expect(Math.abs(after.y - target.y)).toBeLessThan(Math.abs(before.y - target.y));
+  });
+
   test("maintains line spacing in a 4-4-2 style shape", () => {
     const state = createInitialMatchState({
       rngSeed: 14,

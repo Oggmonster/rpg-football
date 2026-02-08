@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import type { BallState } from "../../sim/state/MatchState";
+import type { BallState, PlayerState, Vec2 } from "../../sim/state/MatchState";
 
 export class BallView {
   private scene: Phaser.Scene;
@@ -22,9 +22,10 @@ export class BallView {
     this.ring.destroy();
   }
 
-  update(ball: BallState) {
-    this.ball.setPosition(ball.pos.x, ball.pos.y);
-    this.ring.setPosition(ball.pos.x, ball.pos.y);
+  update(ball: BallState, carrier?: PlayerState | null) {
+    const visualPos = this.resolveVisualPos(ball, carrier);
+    this.ball.setPosition(visualPos.x, visualPos.y);
+    this.ring.setPosition(visualPos.x, visualPos.y);
 
     const speed = Math.hypot(ball.vel.x, ball.vel.y);
     const state = ball.state;
@@ -32,15 +33,15 @@ export class BallView {
 
     if (state !== this.lastState) {
       if (state === "SHOT") {
-        this.spawnBurst(ball.pos.x, ball.pos.y, 0xffa56b, 7);
+        this.spawnBurst(visualPos.x, visualPos.y, 0xffa56b, 7);
       } else if (state === "LOOSE" && this.lastState === "SHOT") {
-        this.spawnBurst(ball.pos.x, ball.pos.y, 0xffd594, 5);
+        this.spawnBurst(visualPos.x, visualPos.y, 0xffd594, 5);
       }
     }
 
     if ((state === "IN_FLIGHT" || state === "SHOT") && speed > 120 && this.scene.time.now - this.lastTrailAtMs > 30) {
       this.lastTrailAtMs = this.scene.time.now;
-      this.spawnTrailDot(ball.pos.x, ball.pos.y, state === "SHOT" ? 0xffb38a : 0xa7ffe9);
+      this.spawnTrailDot(visualPos.x, visualPos.y, state === "SHOT" ? 0xffb38a : 0xa7ffe9);
     }
 
     this.lastState = state;
@@ -85,6 +86,24 @@ export class BallView {
     const sourceSize = Math.max(source?.width ?? 16, source?.height ?? 16, 1);
     this.baseScale = Phaser.Math.Clamp(8 / sourceSize, 0.08, 1.5);
     this.ball.setScale(this.baseScale, this.baseScale);
+  }
+
+  private resolveVisualPos(ball: BallState, carrier?: PlayerState | null): Vec2 {
+    if (ball.state !== "CARRIED" || !carrier) {
+      return { x: ball.pos.x, y: ball.pos.y };
+    }
+
+    const teamDir = carrier.teamId === "HOME" ? 1 : -1;
+    const moveDirRaw = Math.abs(carrier.vel.x) > 4 ? Math.sign(carrier.vel.x) : teamDir;
+    const moveDir = moveDirRaw === 0 ? teamDir : moveDirRaw;
+    const phase = this.scene.time.now * 0.034;
+    const dribbleX = Math.sin(phase) * 1.4;
+    const dribbleY = Math.cos(phase * 0.85) * 0.5;
+
+    return {
+      x: carrier.pos.x + moveDir * 4 + dribbleX,
+      y: carrier.pos.y + 8 + dribbleY,
+    };
   }
 
   private spawnTrailDot(x: number, y: number, color: number) {

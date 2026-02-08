@@ -62,8 +62,11 @@ export class MovementSystem {
       const baseSpeed = Math.max(35, p.stats.pac * 1.7 * (0.5 + p.stamina / 200));
       const intentType = p.intent?.type;
       const sprintBoost = intentType === "CARRY_BURST" || intentType === "TACKLE_TARGET" ? 1.18 : 1;
+      const keeperShotBoost = p.role === "GK" && state.ball.state === "SHOT" ? 1.45 : 1;
+      const keeperSweepBoost =
+        p.role === "GK" && (state.ball.state === "IN_FLIGHT" || state.ball.state === "LOOSE") ? 1.16 : 1;
       const closeControl = targetDistance < 6 ? 0 : 1;
-      const speed = baseSpeed * sprintBoost * closeControl;
+      const speed = baseSpeed * sprintBoost * keeperShotBoost * keeperSweepBoost * closeControl;
       p.vel = scale(dir, speed);
       p.pos = add(p.pos, scale(p.vel, dt));
       p.pos.x = clamp(p.pos.x, PITCH_LEFT + 12, PITCH_RIGHT - 12);
@@ -156,12 +159,18 @@ export class MovementSystem {
     const ball = state.ball.pos;
     const home = team === "HOME";
     const inBox = home ? ball.x < PITCH_LEFT + 210 : ball.x > PITCH_RIGHT - 210;
-    const sweeper = (state.ball.state === "LOOSE" || state.ball.state === "IN_FLIGHT") && inBox;
+    const isFacingShot = state.ball.state === "SHOT" && state.ball.lastTouchTeam !== team;
+    const sweeper = (state.ball.state === "LOOSE" || state.ball.state === "IN_FLIGHT" || isFacingShot) && inBox;
     const xBase = home ? PITCH_LEFT + 28 : PITCH_RIGHT - 28;
-    const x = sweeper ? xBase + (home ? 26 : -26) : xBase;
+    const shotStepOut = isFacingShot ? 18 : 0;
+    const x = sweeper ? xBase + (home ? 26 + shotStepOut : -26 - shotStepOut) : xBase;
+    const shotTravelMs = 220 / 1000;
+    const projectedY = ball.y + state.ball.vel.y * shotTravelMs;
+    const targetY = isFacingShot ? projectedY : PITCH_CENTER_Y + (ball.y - PITCH_CENTER_Y) * 0.42;
+    const clampYPad = isFacingShot ? 70 : 90;
     return {
       x: clamp(x, PITCH_LEFT + 18, PITCH_RIGHT - 18),
-      y: clamp(PITCH_CENTER_Y + (ball.y - PITCH_CENTER_Y) * 0.42, PITCH_TOP + 90, PITCH_BOTTOM - 90),
+      y: clamp(targetY, PITCH_TOP + clampYPad, PITCH_BOTTOM - clampYPad),
     };
   }
 

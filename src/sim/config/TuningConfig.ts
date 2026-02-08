@@ -1,7 +1,7 @@
-﻿export const TUNING = {
+export const TUNING = {
   passSpeedPxPerSec: 260,
   shotSpeedPxPerSec: 440,
-  looseBallFrictionPerSec: 0.92,
+  looseBallFrictionPerSec: 0.86,
   interceptRadiusPx: 28,
   pickupRadiusPx: 20,
   arriveThresholdPx: 10,

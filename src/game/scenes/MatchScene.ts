@@ -18,6 +18,7 @@ import {
 import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
 import type { CardDef } from "../../sim/cards/types";
 import type { SimEvent } from "../../sim/events/SimEvent";
+import type { TeamId } from "../../sim/state/MatchState";
 import { MatchSim } from "../../sim/MatchSim";
 import { commentaryFromEvent } from "../commentary/CommentaryMapper";
 import { CommentaryQueue, type CommentaryLine } from "../commentary/CommentaryQueue";
@@ -408,6 +409,7 @@ export class MatchScene extends Phaser.Scene {
         if (e.type === "goal_scored") {
           this.cameras.main.shake(150, 0.0022, true);
           this.spawnPitchBurst(state.ball.pos.x, state.ball.pos.y, e.team === "HOME" ? 0x79beff : 0xffd673, 14);
+          this.spawnGoalImpactFx(e.team, { x: state.ball.pos.x, y: state.ball.pos.y });
         }
       }
     }
@@ -925,6 +927,85 @@ export class MatchScene extends Phaser.Scene {
         y: y + Math.sin(angle) * speed,
         alpha: 0,
         ease: "Quad.easeOut",
+        onComplete: () => piece.destroy(),
+      });
+    }
+  }
+
+  private spawnGoalImpactFx(scoringTeam: TeamId, fromPos: { x: number; y: number }) {
+    const toRight = scoringTeam === "HOME";
+    const goalX = toRight ? GOAL_LINE_RIGHT_X + 12 : GOAL_LINE_LEFT_X - 12;
+    const goalY = Phaser.Math.Clamp(fromPos.y, PITCH_CENTER_Y - 60, PITCH_CENTER_Y + 60);
+    const trailColor = toRight ? 0x9fe3ff : 0xffe69d;
+    const ballFx = this.add
+      .sprite(fromPos.x, fromPos.y, "ball_shot")
+      .setDepth(19)
+      .setScale(0.5)
+      .setAlpha(0.95);
+    let lastTrailAt = -9999;
+
+    this.tweens.add({
+      targets: ballFx,
+      x: goalX,
+      y: goalY,
+      duration: 220,
+      ease: "Cubic.easeOut",
+      onUpdate: () => {
+        if (this.time.now - lastTrailAt < 28) return;
+        lastTrailAt = this.time.now;
+        const dot = this.add.circle(ballFx.x, ballFx.y, 1.8, trailColor, 0.52).setDepth(18);
+        this.tweens.add({
+          targets: dot,
+          duration: 130,
+          alpha: 0,
+          scaleX: 0.45,
+          scaleY: 0.45,
+          ease: "Quad.easeOut",
+          onComplete: () => dot.destroy(),
+        });
+      },
+      onComplete: () => {
+        ballFx.destroy();
+        this.spawnNetRipple(scoringTeam, goalY);
+      },
+    });
+  }
+
+  private spawnNetRipple(scoringTeam: TeamId, impactY: number) {
+    const toRight = scoringTeam === "HOME";
+    const frontX = toRight ? PITCH_LEFT + PITCH_WIDTH : PITCH_LEFT;
+    const dir = toRight ? 1 : -1;
+    const goalTop = PITCH_CENTER_Y - 70;
+    const goalBottom = PITCH_CENTER_Y + 70;
+    const depth = 16;
+    const netColor = 0xd9f3ff;
+    const pieces: Phaser.GameObjects.Rectangle[] = [];
+
+    for (let i = 0; i < 5; i++) {
+      const t = i / 4;
+      const x = frontX + dir * (2 + t * (depth - 2));
+      const v = this.add.rectangle(x, PITCH_CENTER_Y, 1, goalBottom - goalTop, netColor, 0.58).setDepth(18);
+      pieces.push(v);
+    }
+    for (let i = 0; i < 7; i++) {
+      const t = i / 6;
+      const y = goalTop + t * (goalBottom - goalTop);
+      const h = this.add.rectangle(frontX + dir * (depth / 2), y, depth, 1, netColor, 0.48).setDepth(18);
+      pieces.push(h);
+    }
+
+    const impactNorm = Phaser.Math.Clamp((impactY - goalTop) / Math.max(1, goalBottom - goalTop), 0, 1);
+    for (let i = 0; i < pieces.length; i++) {
+      const piece = pieces[i];
+      const rowJitter = Phaser.Math.FloatBetween(-5, 5);
+      const ripple = (0.4 + impactNorm * 0.6) * Phaser.Math.FloatBetween(5, 10);
+      this.tweens.add({
+        targets: piece,
+        x: piece.x + dir * ripple,
+        y: piece.y + rowJitter * 0.35,
+        alpha: 0.05,
+        duration: 220 + i * 4,
+        ease: "Cubic.easeOut",
         onComplete: () => piece.destroy(),
       });
     }

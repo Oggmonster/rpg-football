@@ -41,7 +41,8 @@ export class MatchView {
       }
     }
 
-    this.ball.update(state.ball);
+    const carrier = state.ball.carrierId ? state.players[state.ball.carrierId] : null;
+    this.ball.update(state.ball, carrier);
   }
 
   setAiDebugVisible(visible: boolean) {
