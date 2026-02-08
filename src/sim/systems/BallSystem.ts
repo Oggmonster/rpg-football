@@ -177,13 +177,14 @@ export class BallSystem {
     return out;
   }
 
-  passTo(state: MatchState, targetPos: Vec2): boolean {
+  passTo(state: MatchState, targetPos: Vec2, speedScale = 1): boolean {
     if (state.ball.state !== "CARRIED") return false;
     const carrier = state.ball.carrierId ? state.players[state.ball.carrierId] : null;
     if (!carrier) return false;
 
     const dir = normalize({ x: targetPos.x - state.ball.pos.x, y: targetPos.y - state.ball.pos.y });
-    state.ball.vel = scale(dir, TUNING.passSpeedPxPerSec);
+    const clampedScale = Math.max(0.55, Math.min(1.7, Number.isFinite(speedScale) ? speedScale : 1));
+    state.ball.vel = scale(dir, TUNING.passSpeedPxPerSec * clampedScale);
     state.ball.targetPos = { ...targetPos };
     state.ball.carrierId = null;
     state.ball.lastTouchTeam = carrier.teamId;
@@ -191,13 +192,14 @@ export class BallSystem {
     return this.canTransition(state.ball.state, "IN_FLIGHT") ? ((state.ball.state = "IN_FLIGHT"), true) : false;
   }
 
-  shootTo(state: MatchState, targetPos: Vec2): boolean {
+  shootTo(state: MatchState, targetPos: Vec2, speedScale = 1): boolean {
     if (state.ball.state !== "CARRIED") return false;
     const carrier = state.ball.carrierId ? state.players[state.ball.carrierId] : null;
     if (!carrier) return false;
 
     const dir = normalize({ x: targetPos.x - state.ball.pos.x, y: targetPos.y - state.ball.pos.y });
-    state.ball.vel = scale(dir, TUNING.shotSpeedPxPerSec);
+    const clampedScale = Math.max(0.6, Math.min(1.85, Number.isFinite(speedScale) ? speedScale : 1));
+    state.ball.vel = scale(dir, TUNING.shotSpeedPxPerSec * clampedScale);
     state.ball.targetPos = { ...targetPos };
     state.ball.carrierId = null;
     state.ball.lastTouchTeam = carrier.teamId;

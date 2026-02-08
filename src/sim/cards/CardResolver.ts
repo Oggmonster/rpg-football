@@ -7,6 +7,7 @@ export interface CardInput {
   direction?: { x: number; y: number };
   targetPos?: { x: number; y: number };
   targetPlayerId?: string;
+  power?: number;
 }
 
 export class CardResolver {

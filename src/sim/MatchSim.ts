@@ -801,6 +801,22 @@ export class MatchSim {
     return { x: direction.x / mag, y: direction.y / mag };
   }
 
+  private resolveInputPower(input: CardInput): number {
+    const raw = input.power;
+    if (!Number.isFinite(raw)) return 0.5;
+    return Math.max(0, Math.min(1, raw as number));
+  }
+
+  private resolvePassSpeedScale(input: CardInput): number {
+    const power = this.resolveInputPower(input);
+    return 0.7 + power * 0.7;
+  }
+
+  private resolveShotSpeedScale(input: CardInput): number {
+    const power = this.resolveInputPower(input);
+    return 0.75 + power * 0.8;
+  }
+
   private clampToPitch(pos: Vec2): Vec2 {
     const fallbackX = (PITCH_LEFT + PITCH_RIGHT) / 2;
     const fallbackY = PITCH_CENTER_Y;
@@ -925,6 +941,7 @@ export class MatchSim {
   private playShortPass(team: TeamId, input: CardInput) {
     const carrier = this.getCarrierForTeam(team);
     if (!carrier) return false;
+    const passSpeedScale = this.resolvePassSpeedScale(input);
     const targetedMate =
       (input.targetPlayerId && this.state.players[input.targetPlayerId]?.teamId === team && input.targetPlayerId !== carrier.id
         ? this.state.players[input.targetPlayerId]
@@ -943,7 +960,7 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 700,
       priority: 100,
     };
-    const ok = this.ballSystem.passTo(this.state, resolvedTarget);
+    const ok = this.ballSystem.passTo(this.state, resolvedTarget, passSpeedScale);
     if (!ok) return false;
     this.adjustMomentum(team, passSuccess ? 0.01 : -0.018, passSuccess ? "pass_complete" : "pass_mishit");
     this.ballSystem.grantCarrierProtection(this.state, 260);
@@ -953,6 +970,7 @@ export class MatchSim {
   private playLongPass(team: TeamId, input: CardInput) {
     const carrier = this.getCarrierForTeam(team);
     if (!carrier) return false;
+    const passSpeedScale = this.resolvePassSpeedScale(input);
     const targetedMate =
       (input.targetPlayerId && this.state.players[input.targetPlayerId]?.teamId === team && input.targetPlayerId !== carrier.id
         ? this.state.players[input.targetPlayerId]
@@ -971,7 +989,7 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 850,
       priority: 100,
     };
-    const ok = this.ballSystem.passTo(this.state, resolvedTarget);
+    const ok = this.ballSystem.passTo(this.state, resolvedTarget, passSpeedScale);
     if (!ok) return false;
     this.adjustMomentum(team, passSuccess ? 0.012 : -0.022, passSuccess ? "through_complete" : "through_mishit");
     return true;
@@ -980,6 +998,7 @@ export class MatchSim {
   private playCross(team: TeamId, input: CardInput) {
     const carrier = this.getCarrierForTeam(team);
     if (!carrier) return false;
+    const passSpeedScale = this.resolvePassSpeedScale(input);
 
     const inOwnHalf = team === "HOME" ? carrier.pos.x < 480 : carrier.pos.x > 480;
     const targetedMate = this.pickTeammateByDirection(team, carrier.id, input.direction, 60, 500);
@@ -1000,7 +1019,7 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 900,
       priority: 100,
     };
-    const ok = this.ballSystem.passTo(this.state, resolvedTarget);
+    const ok = this.ballSystem.passTo(this.state, resolvedTarget, passSpeedScale);
     if (!ok) return false;
     this.adjustMomentum(team, passSuccess ? 0.012 : -0.02, passSuccess ? "cross_complete" : "cross_mishit");
     return true;
@@ -1050,6 +1069,7 @@ export class MatchSim {
   private playShoot(team: TeamId, input: CardInput) {
     const carrier = this.getCarrierForTeam(team);
     if (!carrier) return false;
+    const shotSpeedScale = this.resolveShotSpeedScale(input);
     const aimedShot = Boolean(input.direction || input.targetPos);
     const goal = aimedShot ? this.resolveAimTarget(carrier.pos, team, input, 340) : this.getShotTarget(team);
     const dist = Math.hypot(goal.x - carrier.pos.x, goal.y - carrier.pos.y);
@@ -1065,7 +1085,7 @@ export class MatchSim {
         expiresAtMs: this.state.timeMs + 500,
         priority: 100,
       };
-      const fired = this.ballSystem.shootTo(this.state, shotTarget);
+      const fired = this.ballSystem.shootTo(this.state, shotTarget, shotSpeedScale);
       if (fired) {
         this.adjustMomentum(team, shotOnTarget ? 0.02 : -0.02, shotOnTarget ? "shot_on_target" : "shot_off_target");
       }

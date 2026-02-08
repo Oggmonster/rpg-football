@@ -85,18 +85,19 @@ export class CardView extends Phaser.GameObjects.Container {
     });
   }
 
-  setCard(cardId: string, opts?: { status?: CardVisualStatus; cooldownMs?: number; selected?: boolean; hint?: string }) {
+  setCard(cardId: string, opts?: { status?: CardVisualStatus; cooldownMs?: number; selected?: boolean; hint?: string; title?: string }) {
     const prevId = this.cardId;
     const prevStatus = this.activeStatus;
     const status = opts?.status ?? "READY";
     const cooldownMs = opts?.cooldownMs ?? 0;
     const selected = opts?.selected ?? false;
     const hint = opts?.hint ?? "";
+    const title = opts?.title ?? cardId;
 
     this.cardId = cardId;
     this.activeStatus = status;
     this.activeSelected = selected;
-    this.label.setText(cardId || "-");
+    this.label.setText(title || "-");
 
     const show = Boolean(cardId);
     const baseAlpha = show ? 1 : 0.35;

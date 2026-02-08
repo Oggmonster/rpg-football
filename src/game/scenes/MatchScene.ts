@@ -31,10 +31,23 @@ import { MatchView } from "../view/MatchView";
 type CatalogJson = { cards: CardDef[] };
 const AIM_WINDOW_MS = 5000;
 const AIM_SLOWMO_FACTOR = 0.22;
+const AIM_LINE_LENGTH_PX = 165;
+const POWER_HOLD_MAX_MS = 900;
 const AIM_CARD_TYPES = new Set<CardDef["type"]>(["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS", "SHOOT", "RUSH", "DRIBBLE"]);
+const POWER_AFFECTED_CARD_TYPES = new Set<CardDef["type"]>(["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS", "SHOOT"]);
 const HAND_HOTKEYS = ["A", "S", "D"] as const;
 type HandHotkey = (typeof HAND_HOTKEYS)[number];
 type AimConfirmMode = "pointer" | "hotkey";
+const ATTACK_LANE_PREFS: Record<HandHotkey, CardDef["type"][]> = {
+  A: ["RUSH", "DRIBBLE"],
+  S: ["SHOOT"],
+  D: ["PASS", "CROSS", "THROUGH_PASS", "LONG_BALL"],
+};
+const DEFENSE_LANE_PREFS: Record<HandHotkey, CardDef["type"][]> = {
+  A: ["PRESS", "COVER"],
+  S: ["TACKLE"],
+  D: ["INTERCEPT", "COVER", "PRESS"],
+};
 
 export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
@@ -71,9 +84,13 @@ export class MatchScene extends Phaser.Scene {
   private aimDragActive = false;
   private aimConfirmMode: AimConfirmMode | null = null;
   private hotkeyHeld = new Set<HandHotkey>();
+  private hotkeyHoldStartedAtMs = new Map<HandHotkey, number>();
   private hotkeyCardByKey = new Map<HandHotkey, string>();
+  private hotkeyDisplayCardByKey = new Map<HandHotkey, string>();
   private hotkeyAimKey: HandHotkey | null = null;
   private cardTypeById = new Map<string, CardDef["type"]>();
+  private cardNameById = new Map<string, string>();
+  private cardPowerById = new Map<string, number>();
   private commentaryQueue = new CommentaryQueue();
   private lastPhase = "";
   private squadIdsForProgression: string[] = [];
@@ -93,8 +110,18 @@ export class MatchScene extends Phaser.Scene {
     const attackCatalog = (selectedAttack.cards.length === 15 ? selectedAttack : attackCards) as CatalogJson;
     const defenseCatalog = (selectedDefense.cards.length === 15 ? selectedDefense : defenseCards) as CatalogJson;
     this.cardTypeById.clear();
-    for (const card of attackCatalog.cards) this.cardTypeById.set(card.id, card.type);
-    for (const card of defenseCatalog.cards) this.cardTypeById.set(card.id, card.type);
+    this.cardNameById.clear();
+    this.cardPowerById.clear();
+    for (const card of attackCatalog.cards) {
+      this.cardTypeById.set(card.id, card.type);
+      this.cardNameById.set(card.id, card.name);
+      this.cardPowerById.set(card.id, this.extractCardPower(card.id));
+    }
+    for (const card of defenseCatalog.cards) {
+      this.cardTypeById.set(card.id, card.type);
+      this.cardNameById.set(card.id, card.name);
+      this.cardPowerById.set(card.id, this.extractCardPower(card.id));
+    }
     const squad = getSelectedSquadPlayers(profile);
 
     this.sim = MatchSim.createFromCatalogs({
@@ -230,7 +257,7 @@ export class MatchScene extends Phaser.Scene {
     this.showFeedback(`Event: ${activeEvent.label}`);
 
     this.helpText = this.add
-      .text(16, 44, "A/S/D: hold aim, release play | P: possession | T: pause | ESC: menu | F3/F4: debug", {
+      .text(16, 44, "A Move | S Shoot | D Pass | hold to aim/release play | P possession | T pause | ESC menu", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -496,7 +523,10 @@ export class MatchScene extends Phaser.Scene {
     this.postMatchHint.setVisible(true);
   }
 
-  private tryPlayCard(cardId: string, cardInput: { direction: { x: number; y: number }; targetPos: { x: number; y: number } }) {
+  private tryPlayCard(
+    cardId: string,
+    cardInput: { direction: { x: number; y: number }; targetPos: { x: number; y: number }; power?: number }
+  ) {
     const ok = this.sim.playCard(cardId, cardInput);
     this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
     if (!ok) {
@@ -524,6 +554,7 @@ export class MatchScene extends Phaser.Scene {
   private onCardHotkeyDown(key: HandHotkey) {
     if (this.hotkeyHeld.has(key)) return;
     this.hotkeyHeld.add(key);
+    this.hotkeyHoldStartedAtMs.set(key, this.time.now);
 
     if (this.pendingAimCardId && this.hotkeyAimKey && this.hotkeyAimKey !== key) {
       this.showFeedback("Finish current aim first");
@@ -554,13 +585,16 @@ export class MatchScene extends Phaser.Scene {
   private onCardHotkeyUp(key: HandHotkey) {
     if (!this.hotkeyHeld.has(key)) return;
     this.hotkeyHeld.delete(key);
+    const holdStartedAt = this.hotkeyHoldStartedAtMs.get(key);
+    this.hotkeyHoldStartedAtMs.delete(key);
+    const holdMs = holdStartedAt !== undefined ? Math.max(0, this.time.now - holdStartedAt) : 0;
 
     const cardId = this.hotkeyCardByKey.get(key);
     this.hotkeyCardByKey.delete(key);
     if (!cardId) return;
 
     if (this.pendingAimCardId && this.hotkeyAimKey === key) {
-      this.executeAimedCard();
+      this.executeAimedCard(holdMs);
       this.hotkeyAimKey = null;
       return;
     }
@@ -569,13 +603,11 @@ export class MatchScene extends Phaser.Scene {
 
     this.selectedCardId = cardId;
     this.selectedCardUntilMs = this.time.now + 900;
-    this.tryPlayCard(cardId, this.buildCardInput());
+    this.tryPlayCard(cardId, this.buildCardInput(holdMs, cardId));
   }
 
   private getCardIdForHotkey(key: HandHotkey) {
-    const index = key === "A" ? 0 : key === "S" ? 1 : 2;
-    const hand = this.sim.getActiveHandCardIds();
-    return hand[index] ?? null;
+    return this.hotkeyDisplayCardByKey.get(key) ?? null;
   }
 
   private shouldUseDragAim(cardId: string) {
@@ -595,7 +627,7 @@ export class MatchScene extends Phaser.Scene {
 
     this.pendingAimCardId = cardId;
     this.aimOrigin = origin;
-    this.aimTarget = this.clampAimPoint(origin.x + dirX * 220, origin.y);
+    this.aimTarget = this.clampAimPoint(origin.x + dirX * AIM_LINE_LENGTH_PX, origin.y);
     this.aimUntilMs = this.time.now + AIM_WINDOW_MS;
     this.aimDragActive = false;
     this.aimConfirmMode = confirmMode;
@@ -628,28 +660,30 @@ export class MatchScene extends Phaser.Scene {
     if (message) this.showFeedback(message);
   }
 
-  private executeAimedCard() {
+  private executeAimedCard(holdMs?: number) {
     if (!this.pendingAimCardId) return;
     const cardId = this.pendingAimCardId;
-    const input = this.buildAimedCardInput();
+    const input = this.buildAimedCardInput(holdMs, cardId);
     this.cancelAimMode();
     this.selectedCardId = cardId;
     this.selectedCardUntilMs = this.time.now + 900;
     this.tryPlayCard(cardId, input);
   }
 
-  private buildAimedCardInput() {
+  private buildAimedCardInput(holdMs?: number, cardId?: string) {
     if (!this.aimOrigin || !this.aimTarget) {
-      return this.buildCardInput();
+      return this.buildCardInput(holdMs, cardId);
     }
     const dx = this.aimTarget.x - this.aimOrigin.x;
     const dy = this.aimTarget.y - this.aimOrigin.y;
     const mag = Math.hypot(dx, dy);
     const fallback = this.buildCardInput().direction;
     const direction = mag > 0.0001 ? { x: dx / mag, y: dy / mag } : fallback;
+    const power = cardId ? this.getCardInputPower(cardId, holdMs) : undefined;
     return {
       direction,
       targetPos: { x: this.aimTarget.x, y: this.aimTarget.y },
+      power,
     };
   }
 
@@ -660,15 +694,28 @@ export class MatchScene extends Phaser.Scene {
       return;
     }
     const remainingMs = Math.max(0, this.aimUntilMs - this.time.now);
+    const type = this.pendingAimCardId ? this.cardTypeById.get(this.pendingAimCardId) : undefined;
+    const showPower = Boolean(type && POWER_AFFECTED_CARD_TYPES.has(type));
+    const power = showPower ? this.getCurrentAimPower(this.pendingAimCardId ?? undefined) : 0;
     const suffix = this.aimConfirmMode === "hotkey" ? "release key to play" : "release mouse to play";
-    this.aimHintText.setVisible(true).setText(`AIM ${(remainingMs / 1000).toFixed(1)}s  ${suffix}`);
+    const powerTxt = showPower ? `  POW ${Math.round(power * 100)}%` : "";
+    this.aimHintText.setVisible(true).setText(`AIM ${(remainingMs / 1000).toFixed(1)}s  ${suffix}${powerTxt}`);
 
     this.aimGfx.clear();
-    this.aimGfx.lineStyle(2, 0x8de8ff, 0.95);
+    this.aimGfx.lineStyle(2, 0x8de8ff, 0.75);
     this.aimGfx.beginPath();
     this.aimGfx.moveTo(this.aimOrigin.x, this.aimOrigin.y);
     this.aimGfx.lineTo(this.aimTarget.x, this.aimTarget.y);
     this.aimGfx.strokePath();
+    if (showPower) {
+      const fillX = Phaser.Math.Linear(this.aimOrigin.x, this.aimTarget.x, power);
+      const fillY = Phaser.Math.Linear(this.aimOrigin.y, this.aimTarget.y, power);
+      this.aimGfx.lineStyle(4, 0xffe38b, 0.95);
+      this.aimGfx.beginPath();
+      this.aimGfx.moveTo(this.aimOrigin.x, this.aimOrigin.y);
+      this.aimGfx.lineTo(fillX, fillY);
+      this.aimGfx.strokePath();
+    }
     this.aimGfx.fillStyle(0x8de8ff, 0.22);
     this.aimGfx.fillCircle(this.aimOrigin.x, this.aimOrigin.y, 10);
     this.aimGfx.fillStyle(0xffffff, 0.95);
@@ -698,9 +745,22 @@ export class MatchScene extends Phaser.Scene {
   }
 
   private setAimTargetFromPointer(pointer: Phaser.Input.Pointer) {
+    if (!this.aimOrigin) return;
     const worldX = Number.isFinite(pointer.worldX) ? pointer.worldX : this.cameras.main.worldView.centerX;
     const worldY = Number.isFinite(pointer.worldY) ? pointer.worldY : this.cameras.main.worldView.centerY;
-    this.aimTarget = this.clampAimPoint(worldX, worldY);
+    const dx = worldX - this.aimOrigin.x;
+    const dy = worldY - this.aimOrigin.y;
+    const mag = Math.hypot(dx, dy);
+    const fallback = this.aimTarget
+      ? { x: this.aimTarget.x - this.aimOrigin.x, y: this.aimTarget.y - this.aimOrigin.y }
+      : { x: 1, y: 0 };
+    const dir =
+      mag > 0.0001
+        ? { x: dx / mag, y: dy / mag }
+        : Math.hypot(fallback.x, fallback.y) > 0.0001
+        ? { x: fallback.x / Math.hypot(fallback.x, fallback.y), y: fallback.y / Math.hypot(fallback.x, fallback.y) }
+        : { x: 1, y: 0 };
+    this.aimTarget = this.clampAimPoint(this.aimOrigin.x + dir.x * AIM_LINE_LENGTH_PX, this.aimOrigin.y + dir.y * AIM_LINE_LENGTH_PX);
     this.updateAimVisuals();
   }
 
@@ -711,10 +771,86 @@ export class MatchScene extends Phaser.Scene {
     };
   }
 
+  private getHotkeyDisplayCards(cardIds: string[]) {
+    const used = new Set<string>();
+    const out: string[] = [];
+    const prefs = this.sim.getActiveDeckKind() === "ATTACK" ? ATTACK_LANE_PREFS : DEFENSE_LANE_PREFS;
+
+    for (const key of HAND_HOTKEYS) {
+      const candidate = this.pickBestByPreferredTypes(cardIds, prefs[key], used);
+      if (candidate) {
+        used.add(candidate);
+        out.push(candidate);
+      } else {
+        out.push("");
+      }
+    }
+
+    const leftovers = cardIds
+      .filter((id) => !used.has(id))
+      .sort((a, b) => (this.cardPowerById.get(b) ?? 1) - (this.cardPowerById.get(a) ?? 1));
+    for (let i = 0; i < out.length; i++) {
+      if (out[i]) continue;
+      out[i] = leftovers.shift() ?? "";
+    }
+    return out;
+  }
+
+  private pickBestByPreferredTypes(cardIds: string[], preferred: CardDef["type"][], used: Set<string>) {
+    let best: string | null = null;
+    let bestRank = Number.POSITIVE_INFINITY;
+    let bestPower = Number.NEGATIVE_INFINITY;
+    for (const id of cardIds) {
+      if (used.has(id)) continue;
+      const type = this.cardTypeById.get(id);
+      if (!type) continue;
+      const rank = preferred.indexOf(type);
+      if (rank < 0) continue;
+      const power = this.cardPowerById.get(id) ?? 1;
+      if (rank < bestRank || (rank === bestRank && power > bestPower)) {
+        bestRank = rank;
+        bestPower = power;
+        best = id;
+      }
+    }
+    return best;
+  }
+
+  private getCardLabel(cardId: string) {
+    const type = this.cardTypeById.get(cardId) ?? "PASS";
+    const power = this.cardPowerById.get(cardId) ?? 1;
+    const action = this.getActionName(type);
+    return `${action} P${power}`;
+  }
+
+  private getActionName(type: CardDef["type"]) {
+    switch (type) {
+      case "LONG_BALL":
+        return "LONG";
+      case "THROUGH_PASS":
+        return "THRU";
+      default:
+        return type;
+    }
+  }
+
+  private extractCardPower(cardId: string) {
+    const m = cardId.match(/_(\d+)$/);
+    if (!m) return 1;
+    const value = Number.parseInt(m[1], 10);
+    return Number.isFinite(value) && value > 0 ? value : 1;
+  }
+
   private refreshHand() {
     const cardIds = this.sim.getActiveHandCardIds();
+    const ordered = this.getHotkeyDisplayCards(cardIds);
+    this.hotkeyDisplayCardByKey.clear();
+    if (ordered[0]) this.hotkeyDisplayCardByKey.set("A", ordered[0]);
+    if (ordered[1]) this.hotkeyDisplayCardByKey.set("S", ordered[1]);
+    if (ordered[2]) this.hotkeyDisplayCardByKey.set("D", ordered[2]);
     const uiMeta = this.sim.getActiveHandCardUi();
     const cardState: Record<string, HandCardUiState> = {};
+    const cardLabels: Record<string, string> = {};
 
     for (const id of cardIds) {
       const meta = uiMeta[id];
@@ -725,12 +861,13 @@ export class MatchScene extends Phaser.Scene {
         hint: meta.reason,
         selected: this.selectedCardId === id && this.time.now <= this.selectedCardUntilMs,
       };
+      cardLabels[id] = this.getCardLabel(id);
     }
 
-    this.handView.setCards(cardIds, cardState);
+    this.handView.setCards(ordered, cardState, cardLabels);
   }
 
-  private buildCardInput() {
+  private buildCardInput(holdMs?: number, cardId?: string) {
     const state = this.sim.getRenderState();
     const actor = this.sim.getActivePlayerForUi();
     const rawOrigin = actor?.pos ?? state.ball.pos;
@@ -748,7 +885,24 @@ export class MatchScene extends Phaser.Scene {
     return {
       direction,
       targetPos,
+      power: cardId ? this.getCardInputPower(cardId, holdMs) : undefined,
     };
+  }
+
+  private getCurrentAimPower(cardId?: string) {
+    if (!cardId) return 0.5;
+    if (!this.hotkeyAimKey) return 0.5;
+    const startedAt = this.hotkeyHoldStartedAtMs.get(this.hotkeyAimKey);
+    const holdMs = startedAt !== undefined ? Math.max(0, this.time.now - startedAt) : 0;
+    return this.getCardInputPower(cardId, holdMs) ?? 0.5;
+  }
+
+  private getCardInputPower(cardId: string, holdMs?: number) {
+    const type = this.cardTypeById.get(cardId);
+    if (!type || !POWER_AFFECTED_CARD_TYPES.has(type)) return undefined;
+    const ms = Math.max(0, holdMs ?? 0);
+    const norm = Phaser.Math.Clamp(ms / POWER_HOLD_MAX_MS, 0, 1);
+    return 0.2 + norm * 0.8;
   }
 
   private showFeedback(text: string) {

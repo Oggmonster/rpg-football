@@ -59,16 +59,18 @@ export class HandView extends Phaser.GameObjects.Container {
     }
   }
 
-  setCards(cardIds: string[], cardState?: Record<string, HandCardUiState>) {
+  setCards(cardIds: string[], cardState?: Record<string, HandCardUiState>, cardLabels?: Record<string, string>) {
     for (let i = 0; i < this.slots.length; i++) {
       const id = cardIds[i] ?? "";
       this.slotIds[i] = id;
       const meta = id && cardState ? cardState[id] : undefined;
+      const title = id && cardLabels ? cardLabels[id] : undefined;
       this.slots[i].setCard(id, {
         status: meta?.status ?? "READY",
         cooldownMs: meta?.cooldownMs ?? 0,
         selected: meta?.selected ?? false,
         hint: meta?.hint ?? "",
+        title,
       });
       const hasCard = Boolean(id);
       const tag = this.hotkeyTags[i];
