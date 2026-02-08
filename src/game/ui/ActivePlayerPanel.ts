@@ -47,7 +47,7 @@ export class ActivePlayerPanel extends Phaser.GameObjects.Container {
     }
 
     this.nameText.setText(`${player.id} #${player.shirtNumber}`);
-    this.roleText.setText(`${player.teamId} ${player.role} | STA ${Math.round(player.stamina)}`);
+    this.roleText.setText(`${player.teamId} ${player.role} | ${player.aiState} | STA ${Math.round(player.stamina)}`);
     this.statsText.setText(
       `PAC ${player.stats.pac} SHO ${player.stats.sho} PAS ${player.stats.pas} DRI ${player.stats.dri} DEF ${player.stats.def} PHY ${player.stats.phy}`
     );

@@ -183,6 +183,9 @@ export class MatchSim {
         }
       }
     }
+    for (const p of Object.values(this.state.players)) {
+      p.runCooldownMs = Math.max(0, p.runCooldownMs - dtMs);
+    }
 
     this.expireIntents();
 

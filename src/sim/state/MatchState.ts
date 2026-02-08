@@ -36,6 +36,15 @@ export interface PlayerStats {
 }
 
 export type PlayerRole = "GK" | "DEF" | "MID" | "FWD";
+export type PlayerAiState =
+  | "HOLD_ZONE"
+  | "SUPPORT"
+  | "MAKE_RUN"
+  | "PRESS"
+  | "MARK"
+  | "BALL_CARRIER"
+  | "TACKLE_ATTEMPT"
+  | "RECOVER_SHAPE";
 
 export interface IntentState {
   type:
@@ -66,6 +75,8 @@ export interface PlayerState {
   stats: PlayerStats;
   intent: IntentState | null;
   markTargetId: string | null;
+  aiState: PlayerAiState;
+  runCooldownMs: number;
 }
 
 export interface BallState {

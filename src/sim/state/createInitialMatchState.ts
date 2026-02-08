@@ -84,6 +84,8 @@ function createPlayer(
     },
     intent: null,
     markTargetId: null,
+    aiState: role === "GK" ? "HOLD_ZONE" : "RECOVER_SHAPE",
+    runCooldownMs: 0,
   };
 }
 

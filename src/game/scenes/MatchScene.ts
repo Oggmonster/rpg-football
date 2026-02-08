@@ -42,6 +42,7 @@ export class MatchScene extends Phaser.Scene {
   private simAccumulatorMs = 0;
   private feedbackUntilMs = 0;
   private overlayVisible = false;
+  private aiDebugVisible = false;
   private helpText!: Phaser.GameObjects.Text;
   private aimText!: Phaser.GameObjects.Text;
   private selectedDirection = { x: 1, y: 0 };
@@ -149,7 +150,7 @@ export class MatchScene extends Phaser.Scene {
     this.refreshTeamCommands();
 
     this.helpText = this.add
-      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card or command", {
+      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | F4: AI debug | Click card or command", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -185,6 +186,12 @@ export class MatchScene extends Phaser.Scene {
     this.input.keyboard?.on("keydown-F3", () => {
       this.overlayVisible = !this.overlayVisible;
       this.perf.setVisible(this.overlayVisible);
+    });
+
+    this.input.keyboard?.on("keydown-F4", () => {
+      this.aiDebugVisible = !this.aiDebugVisible;
+      this.matchView.setAiDebugVisible(this.aiDebugVisible);
+      this.showFeedback(this.aiDebugVisible ? "AI debug on" : "AI debug off");
     });
 
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);

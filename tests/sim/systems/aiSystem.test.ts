@@ -79,4 +79,57 @@ describe("AISystem", () => {
     expect(state.players[homeNearest.id].intent?.targetPos).toEqual({ x: 480, y: 270 });
     expect(state.players[awayNearest.id].intent?.targetPos).toEqual({ x: 480, y: 270 });
   });
+
+  test("limits simultaneous attacking runs and applies run cooldown", () => {
+    const state = createInitialMatchState({
+      rngSeed: 88,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+
+    state.ball.state = "CARRIED";
+    state.possession.team = "HOME";
+    state.possession.lastTouchTeam = "HOME";
+    for (const id of state.teams.HOME.playerIds) {
+      state.players[id].runCooldownMs = 0;
+    }
+
+    const ai = new AISystem();
+    ai.step(state, new BallSystem(88), new PassSystem());
+
+    const runners = state.teams.HOME.playerIds
+      .map((id) => state.players[id])
+      .filter((p) => p.aiState === "MAKE_RUN");
+    expect(runners.length).toBeLessThanOrEqual(2);
+    if (runners.length > 0) {
+      expect(runners[0].runCooldownMs).toBeGreaterThan(0);
+    }
+  });
+
+  test("does not override high-priority manual intent", () => {
+    const state = createInitialMatchState({
+      rngSeed: 89,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+    state.timeMs = 1000;
+    state.ball.state = "LOOSE";
+    state.ball.carrierId = null;
+    state.possession.team = "NEUTRAL";
+    state.ball.pos = { x: 470, y: 265 };
+
+    const pinnedId = state.teams.HOME.playerIds.find((id) => state.players[id].role !== "GK")!;
+    state.players[pinnedId].intent = {
+      type: "PASS_TO_DIRECTION",
+      expiresAtMs: 2000,
+      priority: 100,
+      direction: { x: 1, y: 0 },
+    };
+
+    const ai = new AISystem();
+    ai.step(state, new BallSystem(89), new PassSystem());
+
+    expect(state.players[pinnedId].intent?.type).toBe("PASS_TO_DIRECTION");
+    expect(state.players[pinnedId].intent?.priority).toBe(100);
+  });
 });

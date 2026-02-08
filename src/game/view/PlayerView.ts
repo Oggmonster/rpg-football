@@ -15,6 +15,8 @@ export class PlayerView {
   private body: Phaser.GameObjects.Rectangle;
   private shadow: Phaser.GameObjects.Ellipse;
   private label: Phaser.GameObjects.Text;
+  private stateLabel: Phaser.GameObjects.Text;
+  private showAiDebug = false;
 
   constructor(scene: Phaser.Scene, player: PlayerState) {
     this.scene = scene;
@@ -33,6 +35,15 @@ export class PlayerView {
       .setOrigin(0.5, 0.5)
       .setAlpha(0.95);
 
+    this.stateLabel = scene.add
+      .text(player.pos.x, player.pos.y + 14, "", {
+        fontFamily: "monospace",
+        fontSize: "8px",
+        color: "#bdf0ff",
+      })
+      .setOrigin(0.5, 0.5)
+      .setVisible(false);
+
     this.applyTeamStyle(player);
   }
 
@@ -40,6 +51,7 @@ export class PlayerView {
     this.shadow.destroy();
     this.body.destroy();
     this.label.destroy();
+    this.stateLabel.destroy();
   }
 
   update(player: PlayerState, alpha: number, isBallCarrier = false) {
@@ -49,6 +61,7 @@ export class PlayerView {
     this.shadow.setPosition(x, y + 5);
     this.body.setPosition(x, y);
     this.label.setPosition(x, y - 11);
+    this.stateLabel.setPosition(x, y + 14);
 
     const speed = Math.hypot(player.vel.x, player.vel.y);
     if (speed > 8) {
@@ -68,6 +81,18 @@ export class PlayerView {
       this.body.setScale(0.92, 1.12);
       this.body.setStrokeStyle(1, 0xff8f7f, 0.95);
     }
+
+    if (this.showAiDebug) {
+      this.stateLabel.setVisible(true);
+      this.stateLabel.setText(player.aiState.replace("_", " "));
+    } else {
+      this.stateLabel.setVisible(false);
+    }
+  }
+
+  setAiDebugVisible(visible: boolean) {
+    this.showAiDebug = visible;
+    this.stateLabel.setVisible(visible);
   }
 
   private applyTeamStyle(player: PlayerState) {

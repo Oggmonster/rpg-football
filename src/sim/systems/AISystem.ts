@@ -10,11 +10,13 @@ function dist(a: Vec2, b: Vec2): number {
 
 export class AISystem {
   step(state: MatchState, ballSystem: BallSystem, passSystem: PassSystem, humanControlledTeam?: TeamId) {
+    this.resetAiStateLabels(state);
     this.updateTeamTacticalState(state);
     this.assignBallChaseAndPressure(state);
     this.assignMarks(state);
     this.assignAttackingSupport(state);
     this.decideBallCarrierAction(state, ballSystem, passSystem, humanControlledTeam);
+    this.resolveFallbackAiStates(state);
   }
 
   private updateTeamTacticalState(state: MatchState) {
@@ -58,6 +60,7 @@ export class AISystem {
         expiresAtMs: state.timeMs + 320,
         priority: 88,
       });
+      this.setAiState(state, chaser.id, "PRESS");
     }
   }
 
@@ -79,6 +82,7 @@ export class AISystem {
         expiresAtMs: state.timeMs + 480,
         priority: distToCarrier < 56 ? 96 : 86,
       });
+      this.setAiState(state, primary.id, distToCarrier < 56 ? "TACKLE_ATTEMPT" : "PRESS");
     }
 
     const secondary = this.findSecondNearestOutfielderToPoint(state, defendingTeam, carrier.pos, primary?.id ?? null);
@@ -91,6 +95,7 @@ export class AISystem {
         expiresAtMs: state.timeMs + 500,
         priority: 80,
       });
+      this.setAiState(state, secondary.id, "MARK");
     }
 
     const support = this.findNearestOutfielderToPoint(state, supportTeam, carrier.pos, carrier.id);
@@ -103,6 +108,7 @@ export class AISystem {
         expiresAtMs: state.timeMs + 560,
         priority: 52,
       });
+      this.setAiState(state, support.id, "SUPPORT");
     }
   }
 
@@ -140,6 +146,7 @@ export class AISystem {
       }
       if (bestDefId) {
         state.players[bestDefId].markTargetId = threat.id;
+        this.setAiState(state, bestDefId, "MARK");
       }
     }
   }
@@ -149,27 +156,55 @@ export class AISystem {
 
     const carrier = state.players[state.ball.carrierId];
     const team = carrier.teamId;
-    const candidateIds = state.teams[team].playerIds
-      .filter((id) => id !== carrier.id && state.players[id].role !== "GK")
-      .sort((a, b) => {
-        const aP = state.players[a];
-        const bP = state.players[b];
-        const aDist = dist(aP.pos, carrier.pos);
-        const bDist = dist(bP.pos, carrier.pos);
-        return aDist - bDist;
-      })
-      .slice(0, 3);
+    const opp: TeamId = team === "HOME" ? "AWAY" : "HOME";
+    const outfieldIds = state.teams[team].playerIds.filter((id) => id !== carrier.id && state.players[id].role !== "GK");
+    const runBonus = state.teams[team].activeCommand?.modifiers.runFrequencyDelta ?? 0;
+    const maxRuns = runBonus > 0.15 ? 3 : 2;
 
-    const xBase = team === "HOME" ? 36 : -36;
-    const yOffsets = [-34, 0, 34];
-    for (let i = 0; i < candidateIds.length; i++) {
-      const p = state.players[candidateIds[i]];
+    const runCandidates = outfieldIds
+      .map((id) => state.players[id])
+      .filter((p) => p.runCooldownMs <= 0)
+      .map((p) => {
+        const forward = team === "HOME" ? p.pos.x - carrier.pos.x : carrier.pos.x - p.pos.x;
+        const spacing = state.teams[opp].playerIds.reduce((best, oppId) => {
+          const d = dist(state.players[oppId].pos, p.pos);
+          return Math.min(best, d);
+        }, Number.POSITIVE_INFINITY);
+        return { id: p.id, score: forward * 0.7 + spacing * 0.45 + p.stats.pac * 0.25 };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxRuns);
+
+    for (const run of runCandidates) {
+      const p = state.players[run.id];
+      const xLead = team === "HOME" ? 96 : -96;
+      const yBias = p.pos.y < carrier.pos.y ? -30 : 30;
       this.assignIntentIfFree(p.id, state, {
         type: "DRIBBLE_TO_DIRECTION",
-        targetPos: { x: carrier.pos.x + xBase * (i === 1 ? 1.4 : 1), y: carrier.pos.y + yOffsets[i] },
+        targetPos: { x: p.pos.x + xLead, y: p.pos.y + yBias * 0.3 },
+        expiresAtMs: state.timeMs + 620,
+        priority: 57,
+      });
+      p.runCooldownMs = 1800;
+      this.setAiState(state, p.id, "MAKE_RUN");
+    }
+
+    const supportIds = outfieldIds
+      .filter((id) => !runCandidates.some((r) => r.id === id))
+      .sort((a, b) => dist(state.players[a].pos, carrier.pos) - dist(state.players[b].pos, carrier.pos))
+      .slice(0, 2);
+
+    const xBase = team === "HOME" ? 44 : -44;
+    const yOffsets = [-28, 28];
+    for (let i = 0; i < supportIds.length; i++) {
+      const p = state.players[supportIds[i]];
+      this.assignIntentIfFree(p.id, state, {
+        type: "DRIBBLE_TO_DIRECTION",
+        targetPos: { x: carrier.pos.x + xBase, y: carrier.pos.y + yOffsets[i] },
         expiresAtMs: state.timeMs + 420,
         priority: 50,
       });
+      this.setAiState(state, p.id, "SUPPORT");
     }
   }
 
@@ -181,6 +216,7 @@ export class AISystem {
   ) {
     if (state.ball.state !== "CARRIED" || !state.ball.carrierId) return;
     const carrier = state.players[state.ball.carrierId];
+    carrier.aiState = "BALL_CARRIER";
     if (humanControlledTeam && carrier.teamId === humanControlledTeam) return;
     if (carrier.intent) return;
 
@@ -264,10 +300,53 @@ export class AISystem {
       };
       return;
     }
+    if (current && current.expiresAtMs > state.timeMs && current.priority >= 95 && intent.priority < current.priority) {
+      return;
+    }
     if (current && current.expiresAtMs > state.timeMs && current.priority >= intent.priority) {
       return;
     }
     player.intent = intent;
+  }
+
+  private resetAiStateLabels(state: MatchState) {
+    for (const p of Object.values(state.players)) {
+      if (p.role === "GK") {
+        p.aiState = "HOLD_ZONE";
+        continue;
+      }
+      if (state.possession.team === p.teamId) {
+        p.aiState = "SUPPORT";
+      } else {
+        p.aiState = "RECOVER_SHAPE";
+      }
+    }
+  }
+
+  private setAiState(state: MatchState, playerId: string, aiState: MatchState["players"][string]["aiState"]) {
+    const p = state.players[playerId];
+    if (!p || p.role === "GK") return;
+    p.aiState = aiState;
+  }
+
+  private resolveFallbackAiStates(state: MatchState) {
+    for (const p of Object.values(state.players)) {
+      if (p.role === "GK") {
+        p.aiState = "HOLD_ZONE";
+        continue;
+      }
+      if (p.aiState !== "SUPPORT" && p.aiState !== "RECOVER_SHAPE") continue;
+      if (p.markTargetId && state.possession.team !== p.teamId) {
+        p.aiState = "MARK";
+      }
+      if (p.intent?.type === "PRESS_ZONE") p.aiState = "PRESS";
+      if (p.intent?.type === "TACKLE_TARGET") p.aiState = "TACKLE_ATTEMPT";
+      if (p.intent?.type === "CARRY_BURST" || p.intent?.type === "DRIBBLE_TO_DIRECTION") {
+        if (state.possession.team === p.teamId) {
+          p.aiState = "SUPPORT";
+        }
+      }
+    }
   }
 
   private findNearestOutfielderToPoint(state: MatchState, team: TeamId, target: Vec2, excludeId?: string | null) {
