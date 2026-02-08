@@ -162,4 +162,40 @@ describe("MatchSim card lifecycle and hand swap", () => {
     expect(ok).toBe(false);
     expect(sim.getLastActionMessage()).toContain("Halftime");
   });
+
+  test("exposes hand UI status for lockout and cooldown", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 447,
+    });
+    const state = sim.getRenderState();
+    const card = sim.getActiveHandCardIds()[0];
+
+    state.teams.HOME.lockoutMs = 320;
+    let ui = sim.getActiveHandCardUi();
+    expect(ui[card].status).toBe("LOCKOUT");
+    expect(ui[card].playable).toBe(false);
+
+    state.teams.HOME.lockoutMs = 0;
+    state.teams.HOME.cooldowns[card] = 1400;
+    ui = sim.getActiveHandCardUi();
+    expect(ui[card].status).toBe("COOLDOWN");
+    expect(ui[card].playable).toBe(false);
+  });
+
+  test("exposes halftime hand UI status", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 448,
+    });
+
+    sim.step(120000);
+    const handIds = sim.getActiveHandCardIds();
+    const ui = sim.getActiveHandCardUi();
+    expect(handIds.length).toBeGreaterThan(0);
+    expect(ui[handIds[0]].status).toBe("PHASE");
+    expect(ui[handIds[0]].reason).toContain("Halftime");
+  });
 });

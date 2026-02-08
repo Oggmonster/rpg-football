@@ -29,11 +29,11 @@ export class MatchView {
     this.ball.destroy();
   }
 
-  render(state: MatchState, alpha: number) {
+  render(state: MatchState, alpha: number, activePlayerId: string | null = null) {
     for (const p of Object.values(state.players)) {
       const view = this.players.get(p.id);
       if (view) {
-        view.update(p, alpha, state.ball.carrierId === p.id);
+        view.update(p, alpha, state.ball.carrierId === p.id, activePlayerId === p.id);
       } else {
         const nextView = new PlayerView(this.scene, p);
         nextView.setAiDebugVisible(this.aiDebugVisible);

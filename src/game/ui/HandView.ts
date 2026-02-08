@@ -1,5 +1,12 @@
-﻿import Phaser from "phaser";
-import { CardView } from "./CardView";
+import Phaser from "phaser";
+import { CardView, type CardVisualStatus } from "./CardView";
+
+export interface HandCardUiState {
+  status: CardVisualStatus;
+  cooldownMs: number;
+  hint: string;
+  selected: boolean;
+}
 
 export class HandView extends Phaser.GameObjects.Container {
   private slots: CardView[] = [];
@@ -39,14 +46,16 @@ export class HandView extends Phaser.GameObjects.Container {
     }
   }
 
-  setCards(cardIds: string[], cardState?: Record<string, { disabled: boolean; cooldownMs: number }>) {
+  setCards(cardIds: string[], cardState?: Record<string, HandCardUiState>) {
     for (let i = 0; i < this.slots.length; i++) {
       const id = cardIds[i] ?? "";
       this.slotIds[i] = id;
       const meta = id && cardState ? cardState[id] : undefined;
       this.slots[i].setCard(id, {
-        disabled: meta?.disabled ?? false,
+        status: meta?.status ?? "READY",
         cooldownMs: meta?.cooldownMs ?? 0,
+        selected: meta?.selected ?? false,
+        hint: meta?.hint ?? "",
       });
     }
   }

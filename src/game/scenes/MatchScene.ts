@@ -18,9 +18,10 @@ import { MatchSim } from "../../sim/MatchSim";
 import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
 import { ActivePlayerPanel } from "../ui/ActivePlayerPanel";
 import { DirectionPad } from "../ui/DirectionPad";
-import { HandView } from "../ui/HandView";
+import { HandView, type HandCardUiState } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
 import { PerfOverlay } from "../ui/PerfOverlay";
+import { TacticalPauseOverlay } from "../ui/TacticalPauseOverlay";
 import { TeamCommandPanel } from "../ui/TeamCommandPanel";
 import { MatchView } from "../view/MatchView";
 
@@ -36,16 +37,21 @@ export class MatchScene extends Phaser.Scene {
   private perf!: PerfOverlay;
   private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
+  private aimGfx!: Phaser.GameObjects.Graphics;
   private feedbackText!: Phaser.GameObjects.Text;
   private announceText!: Phaser.GameObjects.Text;
   private cardDebugText!: Phaser.GameObjects.Text;
   private simAccumulatorMs = 0;
   private feedbackUntilMs = 0;
   private overlayVisible = false;
+  private tacticalPause = false;
   private aiDebugVisible = false;
+  private tacticalOverlay!: TacticalPauseOverlay;
   private helpText!: Phaser.GameObjects.Text;
   private aimText!: Phaser.GameObjects.Text;
   private selectedDirection = { x: 1, y: 0 };
+  private selectedCardId: string | null = null;
+  private selectedCardUntilMs = 0;
 
   constructor() {
     super("MatchScene");
@@ -74,6 +80,8 @@ export class MatchScene extends Phaser.Scene {
     this.pitchGfx = this.add.graphics();
     this.pitchGfx.setDepth(0);
     this.drawPitch();
+    this.aimGfx = this.add.graphics();
+    this.aimGfx.setDepth(11);
 
     this.matchView = new MatchView(this, this.sim.getRenderState());
 
@@ -83,6 +91,8 @@ export class MatchScene extends Phaser.Scene {
     this.perf.setDepth(21);
 
     this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
+      this.selectedCardId = cardId;
+      this.selectedCardUntilMs = this.time.now + 900;
       const cardInput = this.buildCardInput();
       const ok = this.sim.playCard(cardId, cardInput);
       this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
@@ -127,6 +137,9 @@ export class MatchScene extends Phaser.Scene {
     });
     this.teamCommandPanel.setDepth(40);
 
+    this.tacticalOverlay = new TacticalPauseOverlay(this, this.scale.width - 356, 58);
+    this.tacticalOverlay.setDepth(55);
+
     this.feedbackText = this.add
       .text(16, 532, "", {
         fontFamily: "monospace",
@@ -150,7 +163,7 @@ export class MatchScene extends Phaser.Scene {
     this.refreshTeamCommands();
 
     this.helpText = this.add
-      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | F4: AI debug | Click card or command", {
+      .text(16, 44, "P: toggle possession | T: tactical pause | ESC: menu | F3: perf | F4: AI debug", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -194,6 +207,13 @@ export class MatchScene extends Phaser.Scene {
       this.showFeedback(this.aiDebugVisible ? "AI debug on" : "AI debug off");
     });
 
+    this.input.keyboard?.on("keydown-T", () => {
+      this.tacticalPause = !this.tacticalPause;
+      this.tacticalOverlay.setVisible(this.tacticalPause);
+      this.simAccumulatorMs = 0;
+      this.showFeedback(this.tacticalPause ? "Tactical pause" : "Resume play");
+    });
+
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.pinUiToCamera();
     const initialState = this.sim.getRenderState();
@@ -202,20 +222,29 @@ export class MatchScene extends Phaser.Scene {
 
   update(_time: number, delta: number) {
     const frameDeltaMs = Math.min(delta, 250);
-    this.simAccumulatorMs += frameDeltaMs;
-
     let steps = 0;
-    while (this.simAccumulatorMs >= SIM_TICK_MS && steps < MAX_SIM_STEPS_PER_FRAME) {
-      this.sim.step(SIM_TICK_MS);
-      this.simAccumulatorMs -= SIM_TICK_MS;
-      steps += 1;
+    if (!this.tacticalPause) {
+      this.simAccumulatorMs += frameDeltaMs;
+      while (this.simAccumulatorMs >= SIM_TICK_MS && steps < MAX_SIM_STEPS_PER_FRAME) {
+        this.sim.step(SIM_TICK_MS);
+        this.simAccumulatorMs -= SIM_TICK_MS;
+        steps += 1;
+      }
+    } else {
+      this.simAccumulatorMs = 0;
     }
 
-    const alpha = Phaser.Math.Clamp(this.simAccumulatorMs / SIM_TICK_MS, 0, 1);
+    const alpha = this.tacticalPause ? 0 : Phaser.Math.Clamp(this.simAccumulatorMs / SIM_TICK_MS, 0, 1);
     const state = this.sim.getRenderState();
-    this.matchView.render(state, alpha);
+    const activePlayer = this.sim.getActivePlayerForUi();
+    this.matchView.render(state, alpha, activePlayer?.id ?? null);
     this.hud.updateFromState(state);
-    this.activePlayerPanel.updatePlayer(this.sim.getActivePlayerForUi());
+    this.activePlayerPanel.updatePlayer(activePlayer);
+    this.drawAimPreview(activePlayer?.pos ?? state.ball.pos);
+    if (this.selectedCardUntilMs > 0 && this.time.now >= this.selectedCardUntilMs) {
+      this.selectedCardId = null;
+      this.selectedCardUntilMs = 0;
+    }
     this.refreshHand();
     this.refreshTeamCommands();
 
@@ -267,20 +296,23 @@ export class MatchScene extends Phaser.Scene {
 
   shutdown() {
     this.matchView?.destroy();
+    this.aimGfx?.destroy();
   }
 
   private refreshHand() {
-    const state = this.sim.getRenderState();
-    const home = state.teams.HOME;
     const cardIds = this.sim.getActiveHandCardIds();
-
-    const disabledGlobal = state.phase === "ENDED" || state.flow.goalResetMsRemaining > 0 || home.lockoutMs > 0;
-    const cardState: Record<string, { disabled: boolean; cooldownMs: number }> = {};
+    const uiMeta = this.sim.getActiveHandCardUi();
+    const cardState: Record<string, HandCardUiState> = {};
 
     for (const id of cardIds) {
-      const cooldownMs = home.cooldowns[id] ?? 0;
-      const disabled = disabledGlobal || cooldownMs > 0;
-      cardState[id] = { disabled, cooldownMs };
+      const meta = uiMeta[id];
+      if (!meta) continue;
+      cardState[id] = {
+        status: meta.status,
+        cooldownMs: meta.cooldownMs,
+        hint: meta.reason,
+        selected: this.selectedCardId === id && this.time.now <= this.selectedCardUntilMs,
+      };
     }
 
     this.handView.setCards(cardIds, cardState);
@@ -322,6 +354,24 @@ export class MatchScene extends Phaser.Scene {
   private showFeedback(text: string) {
     this.feedbackText.setText(text);
     this.feedbackUntilMs = this.time.now + 1300;
+  }
+
+  private drawAimPreview(origin: { x: number; y: number }) {
+    if (!this.aimGfx) return;
+    const distance = 220;
+    const target = {
+      x: origin.x + this.selectedDirection.x * distance,
+      y: origin.y + this.selectedDirection.y * distance,
+    };
+
+    this.aimGfx.clear();
+    this.aimGfx.lineStyle(2, 0x9adfff, 0.6);
+    this.aimGfx.beginPath();
+    this.aimGfx.moveTo(origin.x, origin.y);
+    this.aimGfx.lineTo(target.x, target.y);
+    this.aimGfx.strokePath();
+    this.aimGfx.fillStyle(0xcff4ff, 0.85);
+    this.aimGfx.fillCircle(target.x, target.y, 4);
   }
 
   private drawPitch() {
@@ -378,6 +428,7 @@ export class MatchScene extends Phaser.Scene {
     this.directionPad.setScrollFactor(0);
     this.teamCommandPanel.setScrollFactor(0);
     this.activePlayerPanel.setScrollFactor(0);
+    this.tacticalOverlay.setScrollFactor(0);
     this.feedbackText.setScrollFactor(0);
     this.helpText.setScrollFactor(0);
     this.cardDebugText.setScrollFactor(0);

@@ -49,6 +49,15 @@ export interface SquadPlayerConfig {
   stats: PlayerStats;
 }
 
+export type CardUiStatus = "READY" | "COOLDOWN" | "LOCKOUT" | "CONTEXT" | "PHASE" | "RESTART";
+
+export interface CardUiMeta {
+  status: CardUiStatus;
+  playable: boolean;
+  cooldownMs: number;
+  reason: string;
+}
+
 export class MatchSim {
   private state: MatchState;
   private resolver: CardResolver;
@@ -369,6 +378,40 @@ export class MatchSim {
   getActiveHandCardIds(): string[] {
     const team = this.state.teams[this.playerTeam];
     return this.getActiveDeckKind() === "ATTACK" ? team.handAttack.cards : team.handDefense.cards;
+  }
+
+  getActiveHandCardUi(): Record<string, CardUiMeta> {
+    const teamState = this.state.teams[this.playerTeam];
+    const activeDeck = this.getActiveDeckKind();
+    const hand = activeDeck === "ATTACK" ? teamState.handAttack.cards : teamState.handDefense.cards;
+    const carrierId = this.state.ball.carrierId;
+    const controlsBall = Boolean(carrierId && this.state.players[carrierId]?.teamId === this.playerTeam);
+
+    const result: Record<string, CardUiMeta> = {};
+    for (const cardId of hand) {
+      const cooldownMs = teamState.cooldowns[cardId] ?? 0;
+      let meta: CardUiMeta = { status: "READY", playable: true, cooldownMs, reason: "" };
+
+      if (this.state.phase === "ENDED") {
+        meta = { status: "PHASE", playable: false, cooldownMs, reason: "Full Time" };
+      } else if (this.state.phase === "HALFTIME") {
+        meta = { status: "PHASE", playable: false, cooldownMs, reason: "Halftime" };
+      } else if (this.state.flow.goalResetMsRemaining > 0) {
+        meta = { status: "RESTART", playable: false, cooldownMs, reason: "Restart" };
+      } else if (cooldownMs > 0) {
+        meta = { status: "COOLDOWN", playable: false, cooldownMs, reason: "Cooldown" };
+      } else if (teamState.lockoutMs > 0) {
+        meta = { status: "LOCKOUT", playable: false, cooldownMs, reason: "Lockout" };
+      } else if (activeDeck === "ATTACK" && !controlsBall) {
+        meta = { status: "CONTEXT", playable: false, cooldownMs, reason: "Need ball" };
+      } else if (activeDeck === "DEFENSE" && controlsBall) {
+        meta = { status: "CONTEXT", playable: false, cooldownMs, reason: "Out of poss" };
+      }
+
+      result[cardId] = meta;
+    }
+
+    return result;
   }
 
   getMomentum(): number {

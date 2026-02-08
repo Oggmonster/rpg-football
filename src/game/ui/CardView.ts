@@ -1,10 +1,16 @@
-﻿import Phaser from "phaser";
+import Phaser from "phaser";
+
+export type CardVisualStatus = "READY" | "COOLDOWN" | "LOCKOUT" | "CONTEXT" | "PHASE" | "RESTART";
 
 export class CardView extends Phaser.GameObjects.Container {
   private bg: Phaser.GameObjects.Rectangle;
+  private flashRect: Phaser.GameObjects.Rectangle;
   private label: Phaser.GameObjects.Text;
+  private stateLabel: Phaser.GameObjects.Text;
   private cooldownLabel: Phaser.GameObjects.Text;
   private cardId = "";
+  private activeStatus: CardVisualStatus = "READY";
+  private activeSelected = false;
 
   constructor(
     scene: Phaser.Scene,
@@ -20,6 +26,9 @@ export class CardView extends Phaser.GameObjects.Container {
     this.bg = scene.add.rectangle(0, 0, w, h, 0x0f2a20, 1).setOrigin(0, 0);
     this.bg.setStrokeStyle(2, 0xb7ffe3, 0.9);
     this.bg.setScrollFactor(0);
+
+    this.flashRect = scene.add.rectangle(0, 0, w, h, 0xffffff, 0).setOrigin(0, 0);
+    this.flashRect.setScrollFactor(0);
 
     this.label = scene.add.text(8, 8, "-", {
       fontFamily: "monospace",
@@ -38,7 +47,17 @@ export class CardView extends Phaser.GameObjects.Container {
       .setOrigin(1, 1);
     this.cooldownLabel.setScrollFactor(0);
 
-    this.add([this.bg, this.label, this.cooldownLabel]);
+    this.stateLabel = scene.add
+      .text(8, h - 8, "", {
+        fontFamily: "monospace",
+        fontSize: "10px",
+        color: "#ffd280",
+      })
+      .setOrigin(0, 1)
+      .setAlpha(0);
+    this.stateLabel.setScrollFactor(0);
+
+    this.add([this.bg, this.flashRect, this.label, this.cooldownLabel, this.stateLabel]);
     this.setScrollFactor(0);
 
     this.bg.setInteractive({ useHandCursor: true });
@@ -48,56 +67,109 @@ export class CardView extends Phaser.GameObjects.Container {
     });
   }
 
-  setCard(cardId: string, opts?: { disabled?: boolean; cooldownMs?: number }) {
-    const disabled = opts?.disabled ?? false;
+  setCard(cardId: string, opts?: { status?: CardVisualStatus; cooldownMs?: number; selected?: boolean; hint?: string }) {
+    const status = opts?.status ?? "READY";
     const cooldownMs = opts?.cooldownMs ?? 0;
+    const selected = opts?.selected ?? false;
+    const hint = opts?.hint ?? "";
 
     this.cardId = cardId;
+    this.activeStatus = status;
+    this.activeSelected = selected;
     this.label.setText(cardId || "-");
 
     const show = Boolean(cardId);
     const baseAlpha = show ? 1 : 0.35;
-    const disabledAlpha = disabled ? 0.55 : 1;
+    const disabledAlpha = status === "READY" ? 1 : 0.72;
 
     this.bg.setAlpha(baseAlpha * disabledAlpha);
     this.label.setAlpha(baseAlpha * disabledAlpha);
 
-    if (cooldownMs > 0) {
+    if (status === "COOLDOWN" && cooldownMs > 0) {
       this.cooldownLabel.setText(`${(cooldownMs / 1000).toFixed(1)}s`);
       this.cooldownLabel.setAlpha(1);
-      this.bg.setFillStyle(0x2d2a22, 1);
-      this.bg.setStrokeStyle(2, 0xffc67a, 0.9);
     } else {
       this.cooldownLabel.setText("");
       this.cooldownLabel.setAlpha(0);
-      this.bg.setFillStyle(disabled ? 0x1d2521 : 0x0f2a20, 1);
-      this.bg.setStrokeStyle(2, disabled ? 0x8ea39a : 0xb7ffe3, 0.9);
     }
+
+    this.stateLabel.setText(hint);
+    this.stateLabel.setAlpha(hint ? 0.95 : 0);
+    this.applyBaseStyle();
   }
 
   pulseInvalid() {
+    if (!this.cardId) return;
+    this.scene.tweens.killTweensOf(this.flashRect);
+    this.scene.tweens.killTweensOf(this);
+    this.flashRect.setFillStyle(0xaa2e2e, 1).setAlpha(0.05);
     this.scene.tweens.add({
-      targets: this.bg,
-      duration: 90,
-      fillColor: 0x7a2323,
+      targets: this.flashRect,
+      duration: 80,
+      alpha: 0.44,
       yoyo: true,
       repeat: 1,
-      onComplete: () => {
-        this.bg.setFillStyle(0x0f2a20, 1);
-      },
+    });
+    this.scene.tweens.add({
+      targets: this,
+      duration: 55,
+      x: this.x - 2,
+      yoyo: true,
+      repeat: 2,
+      onComplete: () => this.setX(Math.round(this.x)),
     });
   }
 
   pulsePlayed() {
+    if (!this.cardId) return;
+    this.scene.tweens.killTweensOf(this.flashRect);
+    this.flashRect.setFillStyle(0x2aa46d, 1).setAlpha(0.04);
     this.scene.tweens.add({
-      targets: this.bg,
+      targets: this.flashRect,
       duration: 110,
-      fillColor: 0x1f6c4e,
+      alpha: 0.38,
       yoyo: true,
       repeat: 1,
-      onComplete: () => {
-        this.bg.setFillStyle(0x0f2a20, 1);
-      },
     });
+    this.scene.tweens.add({
+      targets: this,
+      duration: 120,
+      scaleX: 1.03,
+      scaleY: 1.03,
+      yoyo: true,
+      onComplete: () => this.setScale(1, 1),
+    });
+  }
+
+  private applyBaseStyle() {
+    switch (this.activeStatus) {
+      case "COOLDOWN":
+        this.bg.setFillStyle(0x2d2a22, 1);
+        this.bg.setStrokeStyle(2, 0xffc67a, 0.9);
+        break;
+      case "LOCKOUT":
+        this.bg.setFillStyle(0x212633, 1);
+        this.bg.setStrokeStyle(2, 0xa8bbff, 0.9);
+        break;
+      case "CONTEXT":
+        this.bg.setFillStyle(0x2b2421, 1);
+        this.bg.setStrokeStyle(2, 0xffaf7d, 0.9);
+        break;
+      case "PHASE":
+      case "RESTART":
+        this.bg.setFillStyle(0x222222, 1);
+        this.bg.setStrokeStyle(2, 0xb3b3b3, 0.85);
+        break;
+      default:
+        this.bg.setFillStyle(0x0f2a20, 1);
+        this.bg.setStrokeStyle(2, 0xb7ffe3, 0.9);
+        break;
+    }
+
+    this.setY(this.activeSelected ? -4 : 0);
+    this.setScale(this.activeSelected ? 1.03 : 1, this.activeSelected ? 1.03 : 1);
+    if (this.activeSelected) {
+      this.bg.setStrokeStyle(2, 0xfaffbf, 1);
+    }
   }
 }
