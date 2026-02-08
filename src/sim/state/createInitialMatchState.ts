@@ -1,4 +1,5 @@
-﻿import { DEFAULT_TEAM_SIZE, MATCH_DURATION_MS } from "../config/MatchConfig";
+import { DEFAULT_TEAM_SIZE, MATCH_DURATION_MS } from "../config/MatchConfig";
+import { DEFAULT_FORMATION } from "../config/FormationConfig";
 import { PITCH_CENTER_X, PITCH_HEIGHT, PITCH_TOP } from "../config/PitchConfig";
 import { RNG } from "../math/RNG";
 import type {
@@ -131,6 +132,7 @@ function createTeamState(id: TeamId, decks: InitialDecks, playerIds: string[]): 
       mentality: "BALANCED",
       pressIntensity: 0.5,
       lineHeight: 0.5,
+      formation: DEFAULT_FORMATION,
     },
   };
 }
@@ -177,3 +179,4 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
     },
   };
 }
+

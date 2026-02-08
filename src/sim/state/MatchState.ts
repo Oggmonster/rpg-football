@@ -1,4 +1,6 @@
-﻿export type TeamId = "HOME" | "AWAY";
+import type { FormationPresetId } from "../config/FormationConfig";
+
+export type TeamId = "HOME" | "AWAY";
 export type DeckKind = "ATTACK" | "DEFENSE";
 export type MatchPhase = "KICKOFF" | "LIVE" | "ENDED";
 export type BallSimState =
@@ -84,6 +86,7 @@ export interface TeamTacticalState {
   mentality: "BALANCED" | "ATTACKING" | "DEFENSIVE";
   pressIntensity: number;
   lineHeight: number;
+  formation: FormationPresetId;
 }
 
 export interface TeamState {
@@ -116,3 +119,4 @@ export interface MatchState {
   ball: BallState;
   flow: MatchFlowState;
 }
+

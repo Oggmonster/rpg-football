@@ -90,4 +90,41 @@ describe("MovementSystem", () => {
     expect(defAvgX).toBeLessThan(midAvgX);
     expect(midAvgX).toBeLessThan(fwdAvgX);
   });
+
+  test("formation presets change attacking line distribution", () => {
+    const state433 = createInitialMatchState({
+      rngSeed: 15,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+    const state4231 = createInitialMatchState({
+      rngSeed: 15,
+      homeDecks: { attack: mkDeck("HA"), defense: mkDeck("HD") },
+      awayDecks: { attack: mkDeck("AA"), defense: mkDeck("AD") },
+    });
+
+    state433.teams.HOME.tactical.formation = "F433";
+    state4231.teams.HOME.tactical.formation = "F4231";
+    state433.possession.team = "HOME";
+    state4231.possession.team = "HOME";
+    state433.ball.state = "CARRIED";
+    state4231.ball.state = "CARRIED";
+
+    const system = new MovementSystem();
+    system.step(state433, 900);
+    system.step(state4231, 900);
+
+    const topX433 = state433.teams.HOME.playerIds
+      .map((id) => state433.players[id])
+      .filter((p) => p.role !== "GK")
+      .map((p) => p.pos.x)
+      .sort((a, b) => b - a);
+    const topX4231 = state4231.teams.HOME.playerIds
+      .map((id) => state4231.players[id])
+      .filter((p) => p.role !== "GK")
+      .map((p) => p.pos.x)
+      .sort((a, b) => b - a);
+
+    expect(topX433[2]).toBeGreaterThan(topX4231[2]);
+  });
 });

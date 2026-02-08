@@ -8,6 +8,7 @@ import {
   PITCH_RIGHT,
   PITCH_TOP,
 } from "../config/PitchConfig";
+import { DEFAULT_FORMATION, FORMATION_PRESETS, type FormationPreset, type FormationPresetId } from "../config/FormationConfig";
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
@@ -174,6 +175,7 @@ export class MovementSystem {
 
   private formationAnchor(state: MatchState, playerId: string, team: TeamId, role: PlayerRole): Vec2 {
     const ids = state.teams[team].playerIds;
+    const preset = this.getTeamFormationPreset(state, team);
     const slot = this.formationAssignments[team][playerId];
     const fallbackIndex = Math.max(0, ids.indexOf(playerId));
     const laneCount = slot?.laneCount ?? ids.length;
@@ -181,13 +183,7 @@ export class MovementSystem {
     const laneY = PITCH_TOP + 20 + ((lane + 1) * (PITCH_BOTTOM - PITCH_TOP - 40)) / (laneCount + 1);
 
     const line: FormationLine = slot?.line ?? (role === "DEF" ? "DEF" : role === "MID" ? "MID" : "FWD");
-    const roleXHome: Record<FormationLine, number> = {
-      DEF: PITCH_LEFT + 250,
-      MID: PITCH_LEFT + 470,
-      FWD: PITCH_LEFT + 670,
-    };
-
-    const homeBase = role === "GK" ? PITCH_LEFT + 50 : roleXHome[line];
+    const homeBase = role === "GK" ? PITCH_LEFT + 50 : PITCH_LEFT + preset.lineXHome[line];
     const baseX = team === "HOME" ? homeBase : PITCH_CENTER_X + (PITCH_CENTER_X - homeBase);
     const tactical = state.teams[team].tactical;
     const attacking = state.possession.team === team;
@@ -219,8 +215,10 @@ export class MovementSystem {
 
   private buildTeamFormationAssignments(state: MatchState, team: TeamId): Record<string, FormationSlot> {
     const out: Record<string, FormationSlot> = {};
+    const preset = this.getTeamFormationPreset(state, team);
     const outfieldIds = state.teams[team].playerIds.filter((id) => state.players[id].role !== "GK");
     const available = [...outfieldIds];
+    const lineCounts = this.normalizeLineCounts(preset, outfieldIds.length);
 
     const takeByPriority = (count: number, priorities: PlayerRole[]) => {
       const picked: string[] = [];
@@ -238,9 +236,9 @@ export class MovementSystem {
       return picked.slice(0, count);
     };
 
-    const defenders = takeByPriority(4, ["DEF", "MID", "FWD", "GK"]);
-    const midfielders = takeByPriority(4, ["MID", "DEF", "FWD", "GK"]);
-    const forwards = takeByPriority(2, ["FWD", "MID", "DEF", "GK"]);
+    const defenders = takeByPriority(lineCounts.DEF, ["DEF", "MID", "FWD", "GK"]);
+    const midfielders = takeByPriority(lineCounts.MID, ["MID", "DEF", "FWD", "GK"]);
+    const forwards = takeByPriority(lineCounts.FWD, ["FWD", "MID", "DEF", "GK"]);
     if (available.length > 0) {
       midfielders.push(...available.splice(0, available.length));
     }
@@ -255,5 +253,39 @@ export class MovementSystem {
     for (let i = 0; i < ids.length; i++) {
       target[ids[i]] = { line, lane: i, laneCount: ids.length };
     }
+  }
+
+  private getTeamFormationPreset(state: MatchState, team: TeamId): FormationPreset {
+    const presetId = state.teams[team].tactical.formation as FormationPresetId | undefined;
+    return FORMATION_PRESETS[presetId ?? DEFAULT_FORMATION] ?? FORMATION_PRESETS[DEFAULT_FORMATION];
+  }
+
+  private normalizeLineCounts(preset: FormationPreset, outfieldCount: number): Record<FormationLine, number> {
+    const counts: Record<FormationLine, number> = {
+      DEF: preset.lines.DEF,
+      MID: preset.lines.MID,
+      FWD: preset.lines.FWD,
+    };
+    let total = counts.DEF + counts.MID + counts.FWD;
+
+    while (total > outfieldCount) {
+      if (counts.MID > 1) {
+        counts.MID -= 1;
+      } else if (counts.FWD > 1) {
+        counts.FWD -= 1;
+      } else if (counts.DEF > 1) {
+        counts.DEF -= 1;
+      } else {
+        break;
+      }
+      total -= 1;
+    }
+
+    while (total < outfieldCount) {
+      counts.MID += 1;
+      total += 1;
+    }
+
+    return counts;
   }
 }
