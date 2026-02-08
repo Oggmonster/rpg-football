@@ -1,10 +1,10 @@
-﻿import Phaser from "phaser";
+import Phaser from "phaser";
 import attackCatalog from "../../data/cards.attack.json";
 import defenseCatalog from "../../data/cards.defense.json";
 import { ATTACK_DECK_CONSTRAINTS, DEFENSE_DECK_CONSTRAINTS } from "../../sim/cards/DeckConstraints";
 import type { CardDef } from "../../sim/cards/types";
 import { validateDeck } from "../../sim/cards/validators/DeckValidator";
-import { updateDecks, loadProfile } from "../profile/ProfileStore";
+import { applyStarterPreset, getStarterPresets, loadProfile, updateDecks } from "../profile/ProfileStore";
 
 function countByType(cards: CardDef[]) {
   const out: Record<string, number> = {};
@@ -41,9 +41,42 @@ export class DeckBuilderScene extends Phaser.Scene {
     this.defenseCounts = countByType(profile.defenseDeckIds.map((id) => defenseMap.get(id)).filter(Boolean) as CardDef[]);
 
     this.add.text(30, 24, "Deck Builder", { fontFamily: "monospace", fontSize: "28px", color: "#f0fff6" });
+    this.add.text(30, 56, "Use starter presets for tactical identity and tweak card type ratios.", {
+      fontFamily: "monospace",
+      fontSize: "12px",
+      color: "#b5efd6",
+    });
 
     this.drawSection("Attack Deck", 40, this.attackCounts, ATTACK_DECK_CONSTRAINTS.byType);
-    this.drawSection("Defense Deck", 500, this.defenseCounts, DEFENSE_DECK_CONSTRAINTS.byType);
+    this.drawSection("Defense Deck", 380, this.defenseCounts, DEFENSE_DECK_CONSTRAINTS.byType);
+
+    this.drawTeamCommandLoadout(710, 96, profile.teamCommandDeckIds);
+
+    const presets = getStarterPresets();
+    presets.forEach((preset, i) => {
+      const y = 288 + i * 58;
+      const btn = this.add
+        .rectangle(710, y, 230, 48, 0x223a31, 1)
+        .setOrigin(0, 0)
+        .setStrokeStyle(1, 0xb7ffe3, 0.7)
+        .setInteractive({ useHandCursor: true });
+      this.add.text(720, y + 6, preset.label, {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#e7fff3",
+      });
+      this.add.text(720, y + 22, preset.description, {
+        fontFamily: "monospace",
+        fontSize: "10px",
+        color: "#b2dfcc",
+        wordWrap: { width: 210 },
+      });
+
+      btn.on("pointerdown", () => {
+        applyStarterPreset(preset.id);
+        this.scene.restart();
+      });
+    });
 
     const saveBtn = this.add.rectangle(320, 492, 200, 38, 0x1f5f45, 1).setStrokeStyle(2, 0xb7ffe3, 0.9).setInteractive({ useHandCursor: true });
     this.add.text(320, 492, "Save Decks", { fontFamily: "monospace", fontSize: "15px", color: "#eafff6" }).setOrigin(0.5);
@@ -67,8 +100,9 @@ export class DeckBuilderScene extends Phaser.Scene {
       updateDecks({
         attackDeckIds: attackDeck.map((c) => c.id),
         defenseDeckIds: defenseDeck.map((c) => c.id),
+        teamCommandDeckIds: profile.teamCommandDeckIds,
       });
-      this.message.setText("Decks saved.");
+      this.message.setText("Decks and command loadout saved.");
     });
 
     backBtn.on("pointerdown", () => this.scene.start("MainMenuScene"));
@@ -80,30 +114,30 @@ export class DeckBuilderScene extends Phaser.Scene {
     counts: Record<string, number>,
     rules: Record<string, { min: number; max: number }>
   ) {
-    this.add.text(x, 72, title, { fontFamily: "monospace", fontSize: "18px", color: "#eafff6" });
+    this.add.text(x, 88, title, { fontFamily: "monospace", fontSize: "18px", color: "#eafff6" });
 
     const rows = Object.keys(rules);
     rows.forEach((type, idx) => {
-      const y = 110 + idx * 36;
+      const y = 126 + idx * 34;
       const rule = rules[type];
       const value = counts[type] ?? 0;
 
       this.add.text(x, y, `${type} (${rule.min}-${rule.max})`, {
         fontFamily: "monospace",
-        fontSize: "13px",
+        fontSize: "12px",
         color: "#cffff0",
       });
 
-      const valueText = this.add.text(x + 190, y, `${value}`, {
+      const valueText = this.add.text(x + 176, y, `${value}`, {
         fontFamily: "monospace",
-        fontSize: "13px",
+        fontSize: "12px",
         color: "#f6fff9",
       });
 
-      const minus = this.add.rectangle(x + 230, y + 9, 20, 18, 0x3a2a2a, 1).setStrokeStyle(1, 0xffc7b7, 0.8).setInteractive({ useHandCursor: true });
-      const plus = this.add.rectangle(x + 256, y + 9, 20, 18, 0x2a3a30, 1).setStrokeStyle(1, 0xb7ffe3, 0.8).setInteractive({ useHandCursor: true });
-      this.add.text(x + 230, y + 9, "-", { fontFamily: "monospace", fontSize: "12px", color: "#fff" }).setOrigin(0.5);
-      this.add.text(x + 256, y + 9, "+", { fontFamily: "monospace", fontSize: "12px", color: "#fff" }).setOrigin(0.5);
+      const minus = this.add.rectangle(x + 210, y + 8, 20, 18, 0x3a2a2a, 1).setStrokeStyle(1, 0xffc7b7, 0.8).setInteractive({ useHandCursor: true });
+      const plus = this.add.rectangle(x + 236, y + 8, 20, 18, 0x2a3a30, 1).setStrokeStyle(1, 0xb7ffe3, 0.8).setInteractive({ useHandCursor: true });
+      this.add.text(x + 210, y + 8, "-", { fontFamily: "monospace", fontSize: "12px", color: "#fff" }).setOrigin(0.5);
+      this.add.text(x + 236, y + 8, "+", { fontFamily: "monospace", fontSize: "12px", color: "#fff" }).setOrigin(0.5);
 
       minus.on("pointerdown", () => {
         counts[type] = Math.max(rule.min, (counts[type] ?? 0) - 1);
@@ -115,6 +149,26 @@ export class DeckBuilderScene extends Phaser.Scene {
         valueText.setText(`${counts[type]}`);
       });
     });
+  }
+
+  private drawTeamCommandLoadout(x: number, y: number, commandIds: string[]) {
+    this.add.text(x, y, "Team Command Loadout", {
+      fontFamily: "monospace",
+      fontSize: "15px",
+      color: "#eafff6",
+    });
+    for (let i = 0; i < 5; i++) {
+      const cmd = commandIds[i] ?? "-";
+      this.add
+        .rectangle(x, y + 24 + i * 30, 230, 24, 0x1f2f29, 1)
+        .setOrigin(0, 0)
+        .setStrokeStyle(1, 0x9cd9c1, 0.7);
+      this.add.text(x + 8, y + 30 + i * 30, cmd.replaceAll("_", " "), {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#dffcf0",
+      });
+    }
   }
 
   private materializeDeck(allCards: CardDef[], counts: Record<string, number>) {

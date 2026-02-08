@@ -58,6 +58,14 @@ export interface CardUiMeta {
   reason: string;
 }
 
+export interface MatchEventModifiers {
+  cooldownMultiplier: number;
+  momentumMultiplier: number;
+  passBonus: number;
+  shotBonus: number;
+  dribbleBonus: number;
+}
+
 export class MatchSim {
   private state: MatchState;
   private resolver: CardResolver;
@@ -72,6 +80,7 @@ export class MatchSim {
   private rng: RNG;
   private attackCatalogIds: string[];
   private defenseCatalogIds: string[];
+  private eventModifiers: MatchEventModifiers;
 
   private debugFrames: SimDebugFrame[] = [];
   private tickCount = 0;
@@ -79,7 +88,7 @@ export class MatchSim {
   private lastActionMessage = "";
   private lastCardDebugLine = "card: - -> - -> idle";
 
-  constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
+  constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog, eventModifiers?: MatchEventModifiers) {
     this.state = state;
     this.resolver = new CardResolver(attackCatalog, defenseCatalog);
     this.rng = new RNG(state.rngSeed ^ 0x73f3);
@@ -91,6 +100,13 @@ export class MatchSim {
     this.tackleSystem = new TackleSystem(state.rngSeed);
     this.attackCatalogIds = attackCatalog.ids().slice(0, DECK_SIZE);
     this.defenseCatalogIds = defenseCatalog.ids().slice(0, DECK_SIZE);
+    this.eventModifiers = eventModifiers ?? {
+      cooldownMultiplier: 1,
+      momentumMultiplier: 1,
+      passBonus: 0,
+      shotBonus: 0,
+      dribbleBonus: 0,
+    };
   }
 
   static createFromCatalogs(args: {
@@ -98,6 +114,9 @@ export class MatchSim {
     defenseCatalog: CatalogJson;
     rngSeed: number;
     homeSquad?: SquadPlayerConfig[];
+    homeTeamCommands?: TeamCommandType[];
+    awayTeamCommands?: TeamCommandType[];
+    eventModifiers?: MatchEventModifiers;
   }): MatchSim {
     const attackErrors = validateDeck(args.attackCatalog.cards, ATTACK_DECK_CONSTRAINTS);
     if (attackErrors.length > 0) {
@@ -126,13 +145,15 @@ export class MatchSim {
       teamSize,
       homeDecks: { attack: attackDeckIds, defense: defenseDeckIds },
       awayDecks: { attack: attackDeckIds, defense: defenseDeckIds },
+      homeTeamCommands: args.homeTeamCommands,
+      awayTeamCommands: args.awayTeamCommands,
     });
 
     if (args.homeSquad && args.homeSquad.length === state.teamSize) {
       MatchSim.applyHomeSquad(state, args.homeSquad);
     }
 
-    const sim = new MatchSim(state, attack, defense);
+    const sim = new MatchSim(state, attack, defense, args.eventModifiers);
 
     sim.drawUpTo(state.teams.HOME.deckAttack, state.teams.HOME.handAttack, HAND_SIZE);
     sim.drawUpTo(state.teams.HOME.deckDefense, state.teams.HOME.handDefense, HAND_SIZE);
@@ -679,11 +700,11 @@ export class MatchSim {
     const momentumAdv = this.getMomentumAdvantage(team);
     const momentumFactor = Math.max(0.75, Math.min(1.2, 1 - momentumAdv * 0.15));
     const commandFactor = this.getTeamCommandModifiers(team)?.cooldownMultiplier ?? 1;
-    return Math.max(180, cooldownMs * momentumFactor * commandFactor);
+    return Math.max(180, cooldownMs * momentumFactor * commandFactor * this.eventModifiers.cooldownMultiplier);
   }
 
   private adjustMomentum(team: TeamId, delta: number, reason: string, stepEvents?: SimEvent[]) {
-    const signedDelta = team === "HOME" ? delta : -delta;
+    const signedDelta = (team === "HOME" ? delta : -delta) * this.eventModifiers.momentumMultiplier;
     const prev = this.state.momentum;
     const next = Math.max(-1, Math.min(1, prev + signedDelta));
     if (Math.abs(next - prev) < 0.0001) return;
@@ -708,15 +729,15 @@ export class MatchSim {
     switch (kind) {
       case "PASS": {
         const base = 0.78 + (carrierStats.pas + carrierStats.dri) / 360;
-        return Math.max(0.45, Math.min(0.98, base + adv * 0.08 + passBonus));
+        return Math.max(0.45, Math.min(0.98, base + adv * 0.08 + passBonus + this.eventModifiers.passBonus));
       }
       case "SHOT": {
         const base = 0.4 + carrierStats.sho / 170;
-        return Math.max(0.18, Math.min(0.92, base + adv * 0.11 + shotBonus));
+        return Math.max(0.18, Math.min(0.92, base + adv * 0.11 + shotBonus + this.eventModifiers.shotBonus));
       }
       case "DRIBBLE": {
         const base = 0.62 + (carrierStats.dri + carrierStats.pac) / 420;
-        return Math.max(0.28, Math.min(0.96, base + adv * 0.08));
+        return Math.max(0.28, Math.min(0.96, base + adv * 0.08 + this.eventModifiers.dribbleBonus));
       }
     }
   }
@@ -770,29 +791,34 @@ export class MatchSim {
   }
 
   private resolveInputDirection(team: TeamId, direction?: Vec2): Vec2 {
-    if (!direction) {
+    if (!direction || !Number.isFinite(direction.x) || !Number.isFinite(direction.y)) {
       return team === "HOME" ? { x: 1, y: 0 } : { x: -1, y: 0 };
     }
     const mag = Math.hypot(direction.x, direction.y);
-    if (mag < 0.0001) {
+    if (!Number.isFinite(mag) || mag < 0.0001) {
       return team === "HOME" ? { x: 1, y: 0 } : { x: -1, y: 0 };
     }
     return { x: direction.x / mag, y: direction.y / mag };
   }
 
   private clampToPitch(pos: Vec2): Vec2 {
+    const fallbackX = (PITCH_LEFT + PITCH_RIGHT) / 2;
+    const fallbackY = PITCH_CENTER_Y;
+    const x = Number.isFinite(pos.x) ? pos.x : fallbackX;
+    const y = Number.isFinite(pos.y) ? pos.y : fallbackY;
     return {
-      x: Math.max(PITCH_LEFT + 6, Math.min(PITCH_RIGHT - 6, pos.x)),
-      y: Math.max(PITCH_TOP + 6, Math.min(PITCH_BOTTOM - 6, pos.y)),
+      x: Math.max(PITCH_LEFT + 6, Math.min(PITCH_RIGHT - 6, x)),
+      y: Math.max(PITCH_TOP + 6, Math.min(PITCH_BOTTOM - 6, y)),
     };
   }
 
   private resolveAimTarget(from: Vec2, team: TeamId, input: CardInput, distance: number): Vec2 {
-    if (input.targetPos) {
+    if (input.targetPos && Number.isFinite(input.targetPos.x) && Number.isFinite(input.targetPos.y)) {
       return this.clampToPitch(input.targetPos);
     }
+    const safeFrom = this.clampToPitch(from);
     const dir = this.resolveInputDirection(team, input.direction);
-    return this.clampToPitch({ x: from.x + dir.x * distance, y: from.y + dir.y * distance });
+    return this.clampToPitch({ x: safeFrom.x + dir.x * distance, y: safeFrom.y + dir.y * distance });
   }
 
   private jitterTarget(target: Vec2, radiusPx: number): Vec2 {

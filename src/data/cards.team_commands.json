@@ -1,0 +1,74 @@
+{
+  "commands": [
+    {
+      "id": "CMD_ALL_OUT_ATTACK",
+      "type": "ALL_OUT_ATTACK",
+      "label": "All Out Attack",
+      "starter": true,
+      "description": "Pushes line higher, boosts runs and finishing, but opens counters."
+    },
+    {
+      "id": "CMD_PARK_THE_BUS",
+      "type": "PARK_THE_BUS",
+      "label": "Park the Bus",
+      "starter": true,
+      "description": "Compresses shape and improves tackle/intercept reliability."
+    },
+    {
+      "id": "CMD_FAST_COUNTER",
+      "type": "FAST_COUNTER",
+      "label": "Fast Counter",
+      "starter": true,
+      "description": "Spikes run frequency and pass aggression after ball wins."
+    },
+    {
+      "id": "CMD_HIGH_PRESS",
+      "type": "HIGH_PRESS",
+      "label": "High Press",
+      "starter": true,
+      "description": "Raises press intensity and tackle pressure high up the pitch."
+    },
+    {
+      "id": "CMD_SLOW_BUILD_UP",
+      "type": "SLOW_BUILD_UP",
+      "label": "Slow Build-Up",
+      "starter": true,
+      "description": "Improves passing structure and control-oriented possession."
+    },
+    {
+      "id": "CMD_WING_OVERLOAD",
+      "type": "WING_OVERLOAD",
+      "label": "Wing Overload",
+      "starter": false,
+      "description": "Shifts runners wide to isolate flank lanes and crossing angles."
+    },
+    {
+      "id": "CMD_MIDFIELD_LOCKDOWN",
+      "type": "MIDFIELD_LOCKDOWN",
+      "label": "Midfield Lockdown",
+      "starter": false,
+      "description": "Prioritizes central duels and denies progressive passes."
+    },
+    {
+      "id": "CMD_TARGET_MAN_PLAY",
+      "type": "TARGET_MAN_PLAY",
+      "label": "Target Man Play",
+      "starter": false,
+      "description": "Favors direct service into a physical forward reference."
+    },
+    {
+      "id": "CMD_FLUID_FORMATION",
+      "type": "FLUID_FORMATION",
+      "label": "Fluid Formation",
+      "starter": false,
+      "description": "Adaptive shape that balances transitions and support lanes."
+    },
+    {
+      "id": "CMD_LAST_10_MINUTES_FURY",
+      "type": "LAST_10_MINUTES_FURY",
+      "label": "Last 10 Minutes Fury",
+      "starter": false,
+      "description": "High-risk all-in surge with heavy stamina and cooldown pressure."
+    }
+  ]
+}

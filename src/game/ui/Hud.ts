@@ -19,6 +19,10 @@ export class Hud extends Phaser.GameObjects.Container {
   private momentumFill: Phaser.GameObjects.Rectangle;
   private commandText: Phaser.GameObjects.Text;
   private statusText: Phaser.GameObjects.Text;
+  private displayedMomentum = 0;
+  private homeScore = 0;
+  private awayScore = 0;
+  private lastTimerFlashSec = -1;
 
   constructor(scene: Phaser.Scene, x: number, y: number) {
     super(scene, x, y);
@@ -78,7 +82,29 @@ export class Hud extends Phaser.GameObjects.Container {
   updateFromState(state: MatchState) {
     const remaining = state.durationMs - state.timeMs;
     this.timerText.setText(formatMs(remaining));
+    if (state.score.HOME !== this.homeScore || state.score.AWAY !== this.awayScore) {
+      this.scene.tweens.add({
+        targets: this.scoreText,
+        duration: 130,
+        scaleX: 1.12,
+        scaleY: 1.12,
+        yoyo: true,
+      });
+      this.homeScore = state.score.HOME;
+      this.awayScore = state.score.AWAY;
+    }
     this.scoreText.setText(`HOME ${state.score.HOME} - ${state.score.AWAY} AWAY`);
+
+    const secRemaining = Math.floor(Math.max(0, remaining) / 1000);
+    if (secRemaining !== this.lastTimerFlashSec && secRemaining > 0 && secRemaining <= 60 && secRemaining % 10 === 0) {
+      this.lastTimerFlashSec = secRemaining;
+      this.scene.tweens.add({
+        targets: this.timerText,
+        duration: 220,
+        alpha: 0.45,
+        yoyo: true,
+      });
+    }
 
     const poss = state.possession.team === "NEUTRAL" ? `NEUTRAL (${state.possession.lastTouchTeam})` : state.possession.team;
     this.possessionText.setText(`POS: ${poss}`);
@@ -113,12 +139,14 @@ export class Hud extends Phaser.GameObjects.Container {
 
   private updateMomentum(momentum: number) {
     const clamped = Phaser.Math.Clamp(momentum, -1, 1);
-    const pct = Math.round(clamped * 100);
+    this.displayedMomentum = Phaser.Math.Linear(this.displayedMomentum, clamped, 0.22);
+    const smooth = Phaser.Math.Clamp(this.displayedMomentum, -1, 1);
+    const pct = Math.round(smooth * 100);
     this.momentumLabelText.setText(`MOM ${pct}%`);
 
-    const width = Math.max(2, Math.abs(clamped) * 88);
+    const width = Math.max(2, Math.abs(smooth) * 88);
     this.momentumFill.setSize(width, 6);
-    this.momentumFill.setPosition(374 + (clamped >= 0 ? width / 2 : -width / 2), 35);
-    this.momentumFill.setFillStyle(clamped >= 0 ? 0x5dd8ff : 0xffc173, 1);
+    this.momentumFill.setPosition(374 + (smooth >= 0 ? width / 2 : -width / 2), 35);
+    this.momentumFill.setFillStyle(smooth >= 0 ? 0x5dd8ff : 0xffc173, 1);
   }
 }

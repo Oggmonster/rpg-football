@@ -3,7 +3,17 @@ import type { FormationPresetId } from "../config/FormationConfig";
 export type TeamId = "HOME" | "AWAY";
 export type DeckKind = "ATTACK" | "DEFENSE";
 export type MatchPhase = "KICKOFF" | "LIVE" | "HALFTIME" | "ENDED";
-export type TeamCommandType = "ALL_OUT_ATTACK" | "PARK_THE_BUS" | "FAST_COUNTER" | "HIGH_PRESS" | "SLOW_BUILD_UP";
+export type TeamCommandType =
+  | "ALL_OUT_ATTACK"
+  | "PARK_THE_BUS"
+  | "FAST_COUNTER"
+  | "HIGH_PRESS"
+  | "SLOW_BUILD_UP"
+  | "WING_OVERLOAD"
+  | "MIDFIELD_LOCKDOWN"
+  | "TARGET_MAN_PLAY"
+  | "FLUID_FORMATION"
+  | "LAST_10_MINUTES_FURY";
 export type BallSimState =
   | "KICKOFF"
   | "CARRIED"

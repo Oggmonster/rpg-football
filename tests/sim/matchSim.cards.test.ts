@@ -122,6 +122,28 @@ describe("MatchSim card lifecycle and hand swap", () => {
     expect((state.ball.targetPos?.y ?? 0) < carrierBefore.y).toBe(true);
   });
 
+  test("sanitizes invalid directional input values", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 449,
+    });
+    const state = sim.getRenderState();
+    state.ball.state = "CARRIED";
+    state.teams.HOME.handAttack.cards[0] = "ATT_PASS_1";
+
+    const ok = sim.playCard("ATT_PASS_1", {
+      direction: { x: Number.NaN, y: Number.NaN },
+      targetPos: { x: Number.NaN, y: Number.NaN },
+    });
+
+    expect(ok).toBe(true);
+    expect(Number.isFinite(state.ball.pos.x)).toBe(true);
+    expect(Number.isFinite(state.ball.pos.y)).toBe(true);
+    expect(Number.isFinite(state.ball.vel.x)).toBe(true);
+    expect(Number.isFinite(state.ball.vel.y)).toBe(true);
+  });
+
   test("emits card_result events for success and failure", () => {
     const sim = MatchSim.createFromCatalogs({
       attackCatalog,

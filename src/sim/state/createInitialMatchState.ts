@@ -9,6 +9,7 @@ import type {
   MatchState,
   PlayerRole,
   PlayerState,
+  TeamCommandType,
   TeamId,
   TeamState,
 } from "./MatchState";
@@ -23,6 +24,8 @@ export interface CreateInitialMatchStateArgs {
   teamSize?: number;
   homeDecks: InitialDecks;
   awayDecks: InitialDecks;
+  homeTeamCommands?: TeamCommandType[];
+  awayTeamCommands?: TeamCommandType[];
 }
 
 function createDeck(ids: string[]): DeckState {
@@ -121,7 +124,8 @@ function buildTeamPlayers(
   return ids;
 }
 
-function createTeamState(id: TeamId, decks: InitialDecks, playerIds: string[]): TeamState {
+function createTeamState(id: TeamId, decks: InitialDecks, playerIds: string[], teamCommands?: TeamCommandType[]): TeamState {
+  const loadout = (teamCommands && teamCommands.length > 0 ? teamCommands : DEFAULT_TEAM_COMMAND_LOADOUT).slice(0, 5);
   return {
     id,
     deckAttack: createDeck(decks.attack),
@@ -137,7 +141,7 @@ function createTeamState(id: TeamId, decks: InitialDecks, playerIds: string[]): 
       lineHeight: 0.5,
       formation: DEFAULT_FORMATION,
     },
-    teamCommands: DEFAULT_TEAM_COMMAND_LOADOUT.map((type) => ({ type, used: false })),
+    teamCommands: loadout.map((type) => ({ type, used: false })),
     activeCommand: null,
   };
 }
@@ -166,8 +170,8 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
       lastTouchTeam: "HOME",
     },
     teams: {
-      HOME: createTeamState("HOME", args.homeDecks, homePlayerIds),
-      AWAY: createTeamState("AWAY", args.awayDecks, awayPlayerIds),
+      HOME: createTeamState("HOME", args.homeDecks, homePlayerIds, args.homeTeamCommands),
+      AWAY: createTeamState("AWAY", args.awayDecks, awayPlayerIds, args.awayTeamCommands),
     },
     players,
     ball: {

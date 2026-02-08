@@ -61,6 +61,24 @@ export class CardView extends Phaser.GameObjects.Container {
     this.setScrollFactor(0);
 
     this.bg.setInteractive({ useHandCursor: true });
+    this.bg.on("pointerover", () => {
+      if (!this.cardId || this.activeSelected) return;
+      this.scene.tweens.add({
+        targets: this,
+        duration: 90,
+        y: -2,
+        ease: "Quad.easeOut",
+      });
+    });
+    this.bg.on("pointerout", () => {
+      if (!this.cardId || this.activeSelected) return;
+      this.scene.tweens.add({
+        targets: this,
+        duration: 90,
+        y: 0,
+        ease: "Quad.easeOut",
+      });
+    });
     this.bg.on("pointerdown", () => {
       if (!this.cardId) return;
       onClick(this.cardId);
@@ -68,6 +86,8 @@ export class CardView extends Phaser.GameObjects.Container {
   }
 
   setCard(cardId: string, opts?: { status?: CardVisualStatus; cooldownMs?: number; selected?: boolean; hint?: string }) {
+    const prevId = this.cardId;
+    const prevStatus = this.activeStatus;
     const status = opts?.status ?? "READY";
     const cooldownMs = opts?.cooldownMs ?? 0;
     const selected = opts?.selected ?? false;
@@ -96,6 +116,13 @@ export class CardView extends Phaser.GameObjects.Container {
     this.stateLabel.setText(hint);
     this.stateLabel.setAlpha(hint ? 0.95 : 0);
     this.applyBaseStyle();
+
+    if (cardId && cardId !== prevId) {
+      this.pulseDraw();
+    } else if (prevStatus === "COOLDOWN" && status === "READY") {
+      this.pulseReady();
+    }
+
   }
 
   pulseInvalid() {
@@ -138,6 +165,31 @@ export class CardView extends Phaser.GameObjects.Container {
       scaleY: 1.03,
       yoyo: true,
       onComplete: () => this.setScale(1, 1),
+    });
+  }
+
+  private pulseDraw() {
+    this.scene.tweens.killTweensOf(this);
+    this.setY(-2);
+    this.setAlpha(0.78);
+    this.scene.tweens.add({
+      targets: this,
+      duration: 150,
+      y: this.activeSelected ? -4 : 0,
+      alpha: 1,
+      ease: "Quad.easeOut",
+    });
+  }
+
+  private pulseReady() {
+    this.scene.tweens.killTweensOf(this.flashRect);
+    this.flashRect.setFillStyle(0x94ffdd, 1).setAlpha(0.08);
+    this.scene.tweens.add({
+      targets: this.flashRect,
+      duration: 150,
+      alpha: 0.34,
+      yoyo: true,
+      repeat: 0,
     });
   }
 
