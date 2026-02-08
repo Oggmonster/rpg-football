@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { CardView, type CardVisualStatus } from "./CardView";
+const HAND_SLOT_HOTKEYS = ["A", "S", "D"] as const;
 
 export interface HandCardUiState {
   status: CardVisualStatus;
@@ -11,6 +12,7 @@ export interface HandCardUiState {
 export class HandView extends Phaser.GameObjects.Container {
   private slots: CardView[] = [];
   private slotIds: string[] = [];
+  private hotkeyTags: Phaser.GameObjects.Text[] = [];
   private onPlay: (cardId: string) => void;
 
   constructor(
@@ -40,8 +42,19 @@ export class HandView extends Phaser.GameObjects.Container {
       const card = new CardView(scene, cx, 0, cardW, cardH, (cardId) => {
         this.onPlay(cardId);
       });
+      const key = HAND_SLOT_HOTKEYS[i] ?? "";
+      const hotkeyTag = scene.add
+        .text(cardW - 8, 4, key ? `[${key}]` : "", {
+          fontFamily: "monospace",
+          fontSize: "10px",
+          color: "#f8ffe4",
+        })
+        .setOrigin(1, 0)
+        .setAlpha(key ? 0.92 : 0);
+      card.add(hotkeyTag);
       this.slots.push(card);
       this.slotIds.push("");
+      this.hotkeyTags.push(hotkeyTag);
       this.add(card);
     }
   }
@@ -57,6 +70,12 @@ export class HandView extends Phaser.GameObjects.Container {
         selected: meta?.selected ?? false,
         hint: meta?.hint ?? "",
       });
+      const hasCard = Boolean(id);
+      const tag = this.hotkeyTags[i];
+      if (tag) {
+        const hasKey = Boolean(HAND_SLOT_HOTKEYS[i]);
+        tag.setAlpha(hasKey ? (hasCard ? 0.92 : 0.35) : 0);
+      }
     }
   }
 

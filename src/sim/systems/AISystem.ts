@@ -76,26 +76,30 @@ export class AISystem {
     if (primary) {
       const distToCarrier = dist(primary.pos, carrier.pos);
       this.assignIntentIfFree(primary.id, state, {
-        type: distToCarrier < 56 ? "TACKLE_TARGET" : "PRESS_ZONE",
+        type: distToCarrier < 74 ? "TACKLE_TARGET" : "PRESS_ZONE",
         targetPos: { x: carrier.pos.x, y: carrier.pos.y },
         targetPlayerId: carrier.id,
-        expiresAtMs: state.timeMs + 480,
-        priority: distToCarrier < 56 ? 96 : 86,
+        expiresAtMs: state.timeMs + 320,
+        priority: distToCarrier < 74 ? 97 : 90,
       });
-      this.setAiState(state, primary.id, distToCarrier < 56 ? "TACKLE_ATTEMPT" : "PRESS");
+      this.setAiState(state, primary.id, distToCarrier < 74 ? "TACKLE_ATTEMPT" : "PRESS");
     }
 
     const secondary = this.findSecondNearestOutfielderToPoint(state, defendingTeam, carrier.pos, primary?.id ?? null);
     if (secondary) {
       const yOffset = secondary.pos.y < carrier.pos.y ? -18 : 18;
+      const secondDist = dist(secondary.pos, carrier.pos);
       this.assignIntentIfFree(secondary.id, state, {
-        type: "COVER_ZONE",
-        targetPos: { x: carrier.pos.x + (defendingTeam === "HOME" ? -16 : 16), y: carrier.pos.y + yOffset },
+        type: secondDist < 84 ? "PRESS_ZONE" : "COVER_ZONE",
+        targetPos:
+          secondDist < 84
+            ? { x: carrier.pos.x, y: carrier.pos.y }
+            : { x: carrier.pos.x + (defendingTeam === "HOME" ? -16 : 16), y: carrier.pos.y + yOffset },
         targetPlayerId: carrier.id,
-        expiresAtMs: state.timeMs + 500,
-        priority: 80,
+        expiresAtMs: state.timeMs + 360,
+        priority: secondDist < 84 ? 88 : 80,
       });
-      this.setAiState(state, secondary.id, "MARK");
+      this.setAiState(state, secondary.id, secondDist < 84 ? "PRESS" : "MARK");
     }
 
     const support = this.findNearestOutfielderToPoint(state, supportTeam, carrier.pos, carrier.id);

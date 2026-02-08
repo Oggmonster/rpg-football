@@ -26,23 +26,28 @@ import { HandView, type HandCardUiState } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
 import { PerfOverlay } from "../ui/PerfOverlay";
 import { TacticalPauseOverlay } from "../ui/TacticalPauseOverlay";
-import { TeamCommandPanel } from "../ui/TeamCommandPanel";
 import { MatchView } from "../view/MatchView";
 
 type CatalogJson = { cards: CardDef[] };
+const AIM_WINDOW_MS = 5000;
+const AIM_SLOWMO_FACTOR = 0.22;
+const AIM_CARD_TYPES = new Set<CardDef["type"]>(["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS", "SHOOT", "RUSH", "DRIBBLE"]);
+const HAND_HOTKEYS = ["A", "S", "D"] as const;
+type HandHotkey = (typeof HAND_HOTKEYS)[number];
+type AimConfirmMode = "pointer" | "hotkey";
 
 export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
-  private teamCommandPanel!: TeamCommandPanel;
   private activePlayerPanel!: ActivePlayerPanel;
   private hud!: Hud;
   private perf!: PerfOverlay;
   private matchView!: MatchView;
   private pitchGfx!: Phaser.GameObjects.Graphics;
-  private commandFxGfx!: Phaser.GameObjects.Graphics;
+  private aimGfx!: Phaser.GameObjects.Graphics;
   private feedbackText!: Phaser.GameObjects.Text;
   private announceText!: Phaser.GameObjects.Text;
+  private aimHintText!: Phaser.GameObjects.Text;
   private postMatchBg!: Phaser.GameObjects.Rectangle;
   private postMatchText!: Phaser.GameObjects.Text;
   private postMatchHint!: Phaser.GameObjects.Text;
@@ -52,7 +57,6 @@ export class MatchScene extends Phaser.Scene {
   private cardDebugText!: Phaser.GameObjects.Text;
   private simAccumulatorMs = 0;
   private feedbackUntilMs = 0;
-  private commandFxUntilMs = 0;
   private overlayVisible = false;
   private tacticalPause = false;
   private aiDebugVisible = false;
@@ -60,6 +64,16 @@ export class MatchScene extends Phaser.Scene {
   private helpText!: Phaser.GameObjects.Text;
   private selectedCardId: string | null = null;
   private selectedCardUntilMs = 0;
+  private pendingAimCardId: string | null = null;
+  private aimOrigin: { x: number; y: number } | null = null;
+  private aimTarget: { x: number; y: number } | null = null;
+  private aimUntilMs = 0;
+  private aimDragActive = false;
+  private aimConfirmMode: AimConfirmMode | null = null;
+  private hotkeyHeld = new Set<HandHotkey>();
+  private hotkeyCardByKey = new Map<HandHotkey, string>();
+  private hotkeyAimKey: HandHotkey | null = null;
+  private cardTypeById = new Map<string, CardDef["type"]>();
   private commentaryQueue = new CommentaryQueue();
   private lastPhase = "";
   private squadIdsForProgression: string[] = [];
@@ -76,14 +90,18 @@ export class MatchScene extends Phaser.Scene {
     this.squadIdsForProgression = [...profile.squadIds];
     const selectedAttack = getCardCatalogByDeckIds(profile.attackDeckIds, "ATTACK");
     const selectedDefense = getCardCatalogByDeckIds(profile.defenseDeckIds, "DEFENSE");
+    const attackCatalog = (selectedAttack.cards.length === 15 ? selectedAttack : attackCards) as CatalogJson;
+    const defenseCatalog = (selectedDefense.cards.length === 15 ? selectedDefense : defenseCards) as CatalogJson;
+    this.cardTypeById.clear();
+    for (const card of attackCatalog.cards) this.cardTypeById.set(card.id, card.type);
+    for (const card of defenseCatalog.cards) this.cardTypeById.set(card.id, card.type);
     const squad = getSelectedSquadPlayers(profile);
 
     this.sim = MatchSim.createFromCatalogs({
-      attackCatalog: (selectedAttack.cards.length === 15 ? selectedAttack : attackCards) as CatalogJson,
-      defenseCatalog: (selectedDefense.cards.length === 15 ? selectedDefense : defenseCards) as CatalogJson,
+      attackCatalog,
+      defenseCatalog,
       rngSeed: 1337,
       homeSquad: squad,
-      homeTeamCommands: profile.teamCommandDeckIds,
       eventModifiers: activeEvent.gameplay,
     });
 
@@ -97,8 +115,8 @@ export class MatchScene extends Phaser.Scene {
     this.pitchGfx = this.add.graphics();
     this.pitchGfx.setDepth(0);
     this.drawPitch();
-    this.commandFxGfx = this.add.graphics();
-    this.commandFxGfx.setDepth(10);
+    this.aimGfx = this.add.graphics();
+    this.aimGfx.setDepth(11);
 
     this.matchView = new MatchView(this, this.sim.getRenderState());
 
@@ -110,29 +128,12 @@ export class MatchScene extends Phaser.Scene {
     this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
       try {
         this.selectedCardId = cardId;
-        this.selectedCardUntilMs = this.time.now + 900;
-        const cardInput = this.buildCardInput();
-        const ok = this.sim.playCard(cardId, cardInput);
-        this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
-        if (!ok) {
-          this.handView.pulseInvalid(cardId);
-          const reason = this.sim.getLastActionMessage();
-          if (reason) {
-            this.showFeedback(reason);
-            this.announceText.setText(reason).setScale(0.94).setAlpha(1);
-            this.tweens.add({
-              targets: this.announceText,
-              scaleX: 1.02,
-              scaleY: 1.02,
-              alpha: 0,
-              duration: 620,
-              ease: "Quad.easeOut",
-            });
-          }
+        if (this.shouldUseDragAim(cardId)) {
+          this.beginAimMode(cardId);
           return;
         }
-        this.handView.pulsePlayed(cardId);
-        this.refreshHand();
+        this.selectedCardUntilMs = this.time.now + 900;
+        this.tryPlayCard(cardId, this.buildCardInput());
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         console.error("[MatchScene] card play failed", error);
@@ -143,16 +144,6 @@ export class MatchScene extends Phaser.Scene {
 
     this.activePlayerPanel = new ActivePlayerPanel(this, panelX, panelY);
     this.activePlayerPanel.setDepth(40);
-
-    this.teamCommandPanel = new TeamCommandPanel(this, this.scale.width - 226, sceneH - 206, (type) => {
-      const ok = this.sim.playTeamCommand(type);
-      if (!ok) {
-        const reason = this.sim.getLastActionMessage() || "Command unavailable";
-        this.showFeedback(reason);
-      }
-      this.refreshTeamCommands();
-    });
-    this.teamCommandPanel.setDepth(40);
 
     this.tacticalOverlay = new TacticalPauseOverlay(this, this.scale.width - 356, 58);
     this.tacticalOverlay.setDepth(55);
@@ -175,6 +166,16 @@ export class MatchScene extends Phaser.Scene {
       .setDepth(45)
       .setScrollFactor(0)
       .setAlpha(0);
+    this.aimHintText = this.add
+      .text(this.scale.width / 2, 100, "", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#c7f6ff",
+      })
+      .setOrigin(0.5, 0.5)
+      .setDepth(45)
+      .setScrollFactor(0)
+      .setVisible(false);
 
     this.commentaryBg = this.add
       .rectangle(this.scale.width / 2, 112, 360, 26, 0x07140f, 0.86)
@@ -226,11 +227,10 @@ export class MatchScene extends Phaser.Scene {
       .setVisible(false);
 
     this.refreshHand();
-    this.refreshTeamCommands();
     this.showFeedback(`Event: ${activeEvent.label}`);
 
     this.helpText = this.add
-      .text(16, 44, "P: toggle possession | T: tactical pause | ESC: menu | F3: perf | F4: AI debug", {
+      .text(16, 44, "A/S/D: hold aim, release play | P: possession | T: pause | ESC: menu | F3/F4: debug", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -251,6 +251,10 @@ export class MatchScene extends Phaser.Scene {
     });
 
     this.input.keyboard?.on("keydown-ESC", () => {
+      if (this.pendingAimCardId) {
+        this.cancelAimMode("Aim canceled");
+        return;
+      }
       this.scene.start("MainMenuScene");
     });
 
@@ -276,6 +280,15 @@ export class MatchScene extends Phaser.Scene {
       if (!this.postMatchApplied) return;
       this.scene.start("MainMenuScene");
     });
+    this.input.keyboard?.on("keydown-A", () => this.onCardHotkeyDown("A"));
+    this.input.keyboard?.on("keydown-S", () => this.onCardHotkeyDown("S"));
+    this.input.keyboard?.on("keydown-D", () => this.onCardHotkeyDown("D"));
+    this.input.keyboard?.on("keyup-A", () => this.onCardHotkeyUp("A"));
+    this.input.keyboard?.on("keyup-S", () => this.onCardHotkeyUp("S"));
+    this.input.keyboard?.on("keyup-D", () => this.onCardHotkeyUp("D"));
+    this.input.on("pointerdown", this.onAimPointerDown, this);
+    this.input.on("pointermove", this.onAimPointerMove, this);
+    this.input.on("pointerup", this.onAimPointerUp, this);
 
     this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
     this.pinUiToCamera();
@@ -287,9 +300,13 @@ export class MatchScene extends Phaser.Scene {
   update(_time: number, delta: number) {
     try {
       const frameDeltaMs = Math.min(delta, 250);
+      if (this.pendingAimCardId && this.time.now >= this.aimUntilMs) {
+        this.cancelAimMode("Aim timed out");
+      }
+      const simSpeed = this.pendingAimCardId ? AIM_SLOWMO_FACTOR : 1;
       let steps = 0;
       if (!this.tacticalPause) {
-        this.simAccumulatorMs += frameDeltaMs;
+        this.simAccumulatorMs += frameDeltaMs * simSpeed;
         while (this.simAccumulatorMs >= SIM_TICK_MS && steps < MAX_SIM_STEPS_PER_FRAME) {
           this.sim.step(SIM_TICK_MS);
           this.simAccumulatorMs -= SIM_TICK_MS;
@@ -323,19 +340,12 @@ export class MatchScene extends Phaser.Scene {
       this.selectedCardUntilMs = 0;
     }
     this.refreshHand();
-    this.refreshTeamCommands();
+    this.updateAimVisuals();
 
     const events = this.sim.drainEvents();
     if (events.length > 0) {
       for (const e of events) {
         this.enqueueCommentaryFromEvent(e);
-        if (e.type === "team_command_activated") {
-          this.showFeedback(`Command: ${e.command}`);
-          this.triggerTeamCommandOverlay(e.command, e.team === "HOME");
-        }
-        if (e.type === "team_command_expired") {
-          this.showFeedback(`${e.command} expired`);
-        }
         if (e.type === "card_result") {
           const prefix = e.cardType ?? e.cardId;
           const msg = e.success ? `${prefix}: ${e.reason}` : `${prefix}: ${e.reason}`;
@@ -393,11 +403,6 @@ export class MatchScene extends Phaser.Scene {
       });
     }
 
-    if (this.commandFxUntilMs > 0 && this.time.now > this.commandFxUntilMs) {
-      this.commandFxUntilMs = 0;
-      this.commandFxGfx.clear();
-    }
-
       this.centerCameraOn(state.ball.pos.x, state.ball.pos.y, state.ball.vel.x, state.ball.vel.y, false);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -408,8 +413,12 @@ export class MatchScene extends Phaser.Scene {
   }
 
   shutdown() {
+    this.input.off("pointerdown", this.onAimPointerDown, this);
+    this.input.off("pointermove", this.onAimPointerMove, this);
+    this.input.off("pointerup", this.onAimPointerUp, this);
     this.matchView?.destroy();
-    this.commandFxGfx?.destroy();
+    this.aimGfx?.destroy();
+    this.aimHintText?.destroy();
     this.postMatchBg?.destroy();
     this.postMatchText?.destroy();
     this.postMatchHint?.destroy();
@@ -487,6 +496,221 @@ export class MatchScene extends Phaser.Scene {
     this.postMatchHint.setVisible(true);
   }
 
+  private tryPlayCard(cardId: string, cardInput: { direction: { x: number; y: number }; targetPos: { x: number; y: number } }) {
+    const ok = this.sim.playCard(cardId, cardInput);
+    this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
+    if (!ok) {
+      this.handView.pulseInvalid(cardId);
+      const reason = this.sim.getLastActionMessage();
+      if (reason) {
+        this.showFeedback(reason);
+        this.announceText.setText(reason).setScale(0.94).setAlpha(1);
+        this.tweens.add({
+          targets: this.announceText,
+          scaleX: 1.02,
+          scaleY: 1.02,
+          alpha: 0,
+          duration: 620,
+          ease: "Quad.easeOut",
+        });
+      }
+      return false;
+    }
+    this.handView.pulsePlayed(cardId);
+    this.refreshHand();
+    return true;
+  }
+
+  private onCardHotkeyDown(key: HandHotkey) {
+    if (this.hotkeyHeld.has(key)) return;
+    this.hotkeyHeld.add(key);
+
+    if (this.pendingAimCardId && this.hotkeyAimKey && this.hotkeyAimKey !== key) {
+      this.showFeedback("Finish current aim first");
+      return;
+    }
+
+    const cardId = this.getCardIdForHotkey(key);
+    if (!cardId) {
+      this.showFeedback(`${key}: empty slot`);
+      this.hotkeyCardByKey.delete(key);
+      return;
+    }
+
+    this.hotkeyCardByKey.set(key, cardId);
+    this.selectedCardId = cardId;
+    this.selectedCardUntilMs = this.time.now + AIM_WINDOW_MS;
+
+    if (this.shouldUseDragAim(cardId)) {
+      this.hotkeyAimKey = key;
+      this.beginAimMode(cardId, "hotkey");
+      this.setAimTargetFromPointer(this.input.activePointer);
+      return;
+    }
+
+    this.showFeedback(`Hold ${key}, release to play`);
+  }
+
+  private onCardHotkeyUp(key: HandHotkey) {
+    if (!this.hotkeyHeld.has(key)) return;
+    this.hotkeyHeld.delete(key);
+
+    const cardId = this.hotkeyCardByKey.get(key);
+    this.hotkeyCardByKey.delete(key);
+    if (!cardId) return;
+
+    if (this.pendingAimCardId && this.hotkeyAimKey === key) {
+      this.executeAimedCard();
+      this.hotkeyAimKey = null;
+      return;
+    }
+
+    if (this.pendingAimCardId) return;
+
+    this.selectedCardId = cardId;
+    this.selectedCardUntilMs = this.time.now + 900;
+    this.tryPlayCard(cardId, this.buildCardInput());
+  }
+
+  private getCardIdForHotkey(key: HandHotkey) {
+    const index = key === "A" ? 0 : key === "S" ? 1 : 2;
+    const hand = this.sim.getActiveHandCardIds();
+    return hand[index] ?? null;
+  }
+
+  private shouldUseDragAim(cardId: string) {
+    if (this.sim.getActiveDeckKind() !== "ATTACK") return false;
+    const type = this.cardTypeById.get(cardId);
+    if (!type) return false;
+    return AIM_CARD_TYPES.has(type);
+  }
+
+  private beginAimMode(cardId: string, confirmMode: AimConfirmMode = "pointer") {
+    this.cancelAimMode();
+    const state = this.sim.getRenderState();
+    const actor = this.sim.getActivePlayerForUi();
+    const rawOrigin = actor?.pos ?? state.ball.pos;
+    const origin = this.clampAimPoint(rawOrigin.x, rawOrigin.y);
+    const dirX = actor?.teamId === "AWAY" ? -1 : 1;
+
+    this.pendingAimCardId = cardId;
+    this.aimOrigin = origin;
+    this.aimTarget = this.clampAimPoint(origin.x + dirX * 220, origin.y);
+    this.aimUntilMs = this.time.now + AIM_WINDOW_MS;
+    this.aimDragActive = false;
+    this.aimConfirmMode = confirmMode;
+    this.selectedCardId = cardId;
+    this.selectedCardUntilMs = this.aimUntilMs;
+
+    const controlHint = confirmMode === "hotkey" ? "release key to play" : "release mouse to play";
+    this.showFeedback(`Aim: drag (${controlHint}, 5.0s)`);
+    this.updateAimVisuals();
+  }
+
+  private cancelAimMode(message?: string) {
+    const hotkeyAimKey = this.hotkeyAimKey;
+    const confirmMode = this.aimConfirmMode;
+    this.pendingAimCardId = null;
+    this.aimOrigin = null;
+    this.aimTarget = null;
+    this.aimUntilMs = 0;
+    this.aimDragActive = false;
+    this.aimConfirmMode = null;
+    this.aimGfx.clear();
+    this.aimHintText.setVisible(false).setText("");
+    if (confirmMode === "hotkey" && hotkeyAimKey) {
+      this.hotkeyCardByKey.delete(hotkeyAimKey);
+      this.hotkeyAimKey = null;
+    }
+    if (this.selectedCardUntilMs === 0 || this.time.now >= this.selectedCardUntilMs) {
+      this.selectedCardId = null;
+    }
+    if (message) this.showFeedback(message);
+  }
+
+  private executeAimedCard() {
+    if (!this.pendingAimCardId) return;
+    const cardId = this.pendingAimCardId;
+    const input = this.buildAimedCardInput();
+    this.cancelAimMode();
+    this.selectedCardId = cardId;
+    this.selectedCardUntilMs = this.time.now + 900;
+    this.tryPlayCard(cardId, input);
+  }
+
+  private buildAimedCardInput() {
+    if (!this.aimOrigin || !this.aimTarget) {
+      return this.buildCardInput();
+    }
+    const dx = this.aimTarget.x - this.aimOrigin.x;
+    const dy = this.aimTarget.y - this.aimOrigin.y;
+    const mag = Math.hypot(dx, dy);
+    const fallback = this.buildCardInput().direction;
+    const direction = mag > 0.0001 ? { x: dx / mag, y: dy / mag } : fallback;
+    return {
+      direction,
+      targetPos: { x: this.aimTarget.x, y: this.aimTarget.y },
+    };
+  }
+
+  private updateAimVisuals() {
+    if (!this.pendingAimCardId || !this.aimOrigin || !this.aimTarget) {
+      this.aimGfx.clear();
+      this.aimHintText.setVisible(false).setText("");
+      return;
+    }
+    const remainingMs = Math.max(0, this.aimUntilMs - this.time.now);
+    const suffix = this.aimConfirmMode === "hotkey" ? "release key to play" : "release mouse to play";
+    this.aimHintText.setVisible(true).setText(`AIM ${(remainingMs / 1000).toFixed(1)}s  ${suffix}`);
+
+    this.aimGfx.clear();
+    this.aimGfx.lineStyle(2, 0x8de8ff, 0.95);
+    this.aimGfx.beginPath();
+    this.aimGfx.moveTo(this.aimOrigin.x, this.aimOrigin.y);
+    this.aimGfx.lineTo(this.aimTarget.x, this.aimTarget.y);
+    this.aimGfx.strokePath();
+    this.aimGfx.fillStyle(0x8de8ff, 0.22);
+    this.aimGfx.fillCircle(this.aimOrigin.x, this.aimOrigin.y, 10);
+    this.aimGfx.fillStyle(0xffffff, 0.95);
+    this.aimGfx.fillCircle(this.aimTarget.x, this.aimTarget.y, 4);
+  }
+
+  private onAimPointerDown(pointer: Phaser.Input.Pointer) {
+    if (!this.pendingAimCardId) return;
+    this.aimDragActive = true;
+    this.setAimTargetFromPointer(pointer);
+  }
+
+  private onAimPointerMove(pointer: Phaser.Input.Pointer) {
+    if (!this.pendingAimCardId) return;
+    if (this.aimConfirmMode !== "hotkey" && !this.aimDragActive) return;
+    this.setAimTargetFromPointer(pointer);
+  }
+
+  private onAimPointerUp(pointer: Phaser.Input.Pointer) {
+    if (!this.pendingAimCardId) return;
+    if (this.aimConfirmMode !== "hotkey" && !this.aimDragActive) return;
+    this.aimDragActive = false;
+    this.setAimTargetFromPointer(pointer);
+    if (this.aimConfirmMode === "pointer") {
+      this.executeAimedCard();
+    }
+  }
+
+  private setAimTargetFromPointer(pointer: Phaser.Input.Pointer) {
+    const worldX = Number.isFinite(pointer.worldX) ? pointer.worldX : this.cameras.main.worldView.centerX;
+    const worldY = Number.isFinite(pointer.worldY) ? pointer.worldY : this.cameras.main.worldView.centerY;
+    this.aimTarget = this.clampAimPoint(worldX, worldY);
+    this.updateAimVisuals();
+  }
+
+  private clampAimPoint(x: number, y: number) {
+    return {
+      x: Phaser.Math.Clamp(Number.isFinite(x) ? x : PITCH_LEFT + PITCH_WIDTH / 2, PITCH_LEFT + 6, PITCH_LEFT + PITCH_WIDTH - 6),
+      y: Phaser.Math.Clamp(Number.isFinite(y) ? y : PITCH_TOP + PITCH_HEIGHT / 2, PITCH_TOP + 6, PITCH_TOP + PITCH_HEIGHT - 6),
+    };
+  }
+
   private refreshHand() {
     const cardIds = this.sim.getActiveHandCardIds();
     const uiMeta = this.sim.getActiveHandCardUi();
@@ -504,10 +728,6 @@ export class MatchScene extends Phaser.Scene {
     }
 
     this.handView.setCards(cardIds, cardState);
-  }
-
-  private refreshTeamCommands() {
-    this.teamCommandPanel.setCommands(this.sim.getTeamCommandsForUi());
   }
 
   private buildCardInput() {
@@ -534,41 +754,6 @@ export class MatchScene extends Phaser.Scene {
   private showFeedback(text: string) {
     this.feedbackText.setText(text);
     this.feedbackUntilMs = this.time.now + 1300;
-  }
-
-  private triggerTeamCommandOverlay(command: string, homeTeam: boolean) {
-    this.commandFxGfx.clear();
-    const x = PITCH_LEFT;
-    const y = PITCH_TOP;
-    const w = PITCH_WIDTH;
-    const h = PITCH_HEIGHT;
-    const tint = homeTeam ? 0x5ab8ff : 0xffce70;
-
-    this.commandFxGfx.fillStyle(tint, 0.08);
-    this.commandFxGfx.fillRect(x, y, w, h);
-    this.commandFxGfx.lineStyle(2, tint, 0.5);
-    for (let i = 0; i < 6; i++) {
-      const yy = y + 36 + i * 66;
-      const startX = homeTeam ? x + 70 : x + w - 70;
-      const endX = homeTeam ? startX + 78 : startX - 78;
-      this.commandFxGfx.beginPath();
-      this.commandFxGfx.moveTo(startX, yy);
-      this.commandFxGfx.lineTo(endX, yy);
-      this.commandFxGfx.strokePath();
-      this.commandFxGfx.fillStyle(tint, 0.65);
-      this.commandFxGfx.fillTriangle(endX, yy, endX + (homeTeam ? 8 : -8), yy - 5, endX + (homeTeam ? 8 : -8), yy + 5);
-    }
-
-    this.commandFxUntilMs = this.time.now + 460;
-    this.announceText.setText(command.replaceAll("_", " ")).setScale(0.92).setAlpha(1);
-    this.tweens.add({
-      targets: this.announceText,
-      duration: 420,
-      scaleX: 1.06,
-      scaleY: 1.06,
-      alpha: 0,
-      ease: "Quad.easeOut",
-    });
   }
 
   private spawnPitchBurst(x: number, y: number, color: number, count: number) {
@@ -639,10 +824,10 @@ export class MatchScene extends Phaser.Scene {
     this.hud.setScrollFactor(0);
     this.perf.setScrollFactor(0);
     this.handView.setScrollFactor(0);
-    this.teamCommandPanel.setScrollFactor(0);
     this.activePlayerPanel.setScrollFactor(0);
     this.tacticalOverlay.setScrollFactor(0);
     this.feedbackText.setScrollFactor(0);
+    this.aimHintText.setScrollFactor(0);
     this.helpText.setScrollFactor(0);
     this.cardDebugText.setScrollFactor(0);
     this.postMatchBg.setScrollFactor(0);

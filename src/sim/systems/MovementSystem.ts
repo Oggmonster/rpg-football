@@ -108,10 +108,13 @@ export class MovementSystem {
   }
 
   private ballCarrierTarget(state: MatchState, team: TeamId, y: number): Vec2 {
-    const goalX = team === "HOME" ? PITCH_RIGHT - 20 : PITCH_LEFT + 20;
     const nearestOpp = this.nearestOpponentDistance(state, team, state.ball.pos);
-    const underPressure = nearestOpp < 54;
-    const x = underPressure ? (team === "HOME" ? state.ball.pos.x + 24 : state.ball.pos.x - 24) : goalX;
+    const underPressure = nearestOpp < 60;
+    const drive = underPressure ? 20 : 54;
+    const x =
+      team === "HOME"
+        ? Math.min(PITCH_RIGHT - 56, state.ball.pos.x + drive)
+        : Math.max(PITCH_LEFT + 56, state.ball.pos.x - drive);
     const laneY = clamp(
       y + (underPressure ? (y < PITCH_CENTER_Y ? 20 : -20) : 0),
       PITCH_TOP + 32,

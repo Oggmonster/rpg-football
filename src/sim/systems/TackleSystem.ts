@@ -41,27 +41,27 @@ export class TackleSystem {
       const intentType = defender.intent?.type;
       if (intentType !== "TACKLE_TARGET" && intentType !== "PRESS_ZONE") continue;
       const distanceToCarrier = dist(defender.pos, carrier.pos);
-      const engageRange = intentType === "TACKLE_TARGET" ? 30 : 22;
+      const engageRange = intentType === "TACKLE_TARGET" ? 36 : 28;
       if (distanceToCarrier > engageRange) continue;
-      if (!inTackleArc(defender, carrier, intentType === "TACKLE_TARGET" ? 78 : 95)) continue;
+      if (!inTackleArc(defender, carrier, intentType === "TACKLE_TARGET" ? 92 : 110)) continue;
 
       const atk = carrier.stats.dri * 0.65 + carrier.stats.pac * 0.35;
       const def = defender.stats.def * 0.6 + defender.stats.phy * 0.4;
-      const base = 0.35 + (def - atk) / 220;
-      const intentScale = intentType === "TACKLE_TARGET" ? 1 : 0.58;
-      const protectionScale = protectedBall ? 0.62 : 1;
-      const spacingScale = Math.max(0.55, 1 - distanceToCarrier / 30);
+      const base = 0.38 + (def - atk) / 200;
+      const intentScale = intentType === "TACKLE_TARGET" ? 1 : 0.72;
+      const protectionScale = protectedBall ? 0.72 : 1;
+      const spacingScale = Math.max(0.58, 1 - distanceToCarrier / 34);
       const momentumAdv = defendingTeam === "HOME" ? state.momentum : -state.momentum;
       const commandBonus = state.teams[defendingTeam].activeCommand?.modifiers.tackleBonus ?? 0;
       const chance = Math.max(
-        0.012,
+        0.02,
         Math.min(
-          0.68,
+          0.82,
           base *
             (0.72 + TUNING.tackleAggression) *
             (1 + commandBonus + momentumAdv * 0.18) *
             dt *
-            4.8 *
+            6.2 *
             intentScale *
             protectionScale *
             spacingScale

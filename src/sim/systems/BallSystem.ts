@@ -229,13 +229,15 @@ export class BallSystem {
     state: MatchState,
     team: TeamId,
     pos: Vec2,
-    _reason: string,
+    reason: string,
     preferKeeper = false
   ): boolean {
     const carrier = this.findNearestPlayerFromTeam(state, team, pos, preferKeeper);
     if (!carrier) return false;
 
-    carrier.pos = { x: pos.x, y: pos.y };
+    if (this.shouldSnapCarrierToRestartSpot(reason)) {
+      carrier.pos = { x: pos.x, y: pos.y };
+    }
     this.assignCarrier(state, carrier.id);
     state.ball.state = "CARRIED";
     state.ball.lastTouchTeam = team;
@@ -256,7 +258,7 @@ export class BallSystem {
     const targetReached = state.ball.targetPos && distance(state.ball.pos, state.ball.targetPos) <= TUNING.arriveThresholdPx;
     const receiver = this.findNearestPlayer(state, TUNING.pickupRadiusPx);
     const speed = Math.hypot(state.ball.vel.x, state.ball.vel.y);
-    const shotPickupReady = state.ball.state === "SHOT" && speed < 120;
+    const shotPickupReady = state.ball.state === "SHOT" && speed < 85;
 
     if (receiver && (targetReached || shotPickupReady)) {
       this.assignCarrier(state, receiver.id);
@@ -335,13 +337,13 @@ export class BallSystem {
     if (!nearGoalX) return false;
 
     const d = distance(gk.pos, state.ball.pos);
-    if (d > 42) return false;
+    if (d > 34) return false;
 
-    const saveChance = Math.max(0.12, Math.min(0.9, 0.2 + gk.stats.def / 120 + gk.stats.phy / 200));
+    const saveChance = Math.max(0.1, Math.min(0.72, 0.08 + gk.stats.def / 230 + gk.stats.phy / 320));
     if (this.rng.next() > saveChance) return false;
 
     this.assignCarrier(state, keeperId);
-    if (this.rng.next() < 0.7) {
+    if (this.rng.next() < 0.45) {
       this.tryTransition(state, "CARRIED", "keeper_save_hold", out);
     } else {
       state.ball.carrierId = null;
@@ -361,12 +363,12 @@ export class BallSystem {
       const keeperId = state.teams[teamId].playerIds.find((id) => state.players[id].role === "GK");
       if (!keeperId) continue;
       const gk = state.players[keeperId];
-      const inRushZone = teamId === "HOME" ? state.ball.pos.x < PITCH_LEFT + 240 : state.ball.pos.x > PITCH_RIGHT - 240;
+      const inRushZone = teamId === "HOME" ? state.ball.pos.x < PITCH_LEFT + 210 : state.ball.pos.x > PITCH_RIGHT - 210;
       if (!inRushZone) continue;
       const d = distance(gk.pos, state.ball.pos);
-      if (d > 64) continue;
+      if (d > 52) continue;
 
-      const rushChance = Math.max(0.22, Math.min(0.9, 0.4 + gk.stats.def / 170 + gk.stats.pac / 260));
+      const rushChance = Math.max(0.16, Math.min(0.66, 0.24 + gk.stats.def / 260 + gk.stats.pac / 360));
       if (this.rng.next() > rushChance) continue;
 
       this.assignCarrier(state, keeperId);
@@ -487,6 +489,10 @@ export class BallSystem {
     state.ball.targetPos = null;
     state.ball.lastTouchTeam = p.teamId;
     state.ball.carrierProtectedUntilMs = state.timeMs + 520;
+  }
+
+  private shouldSnapCarrierToRestartSpot(reason: string) {
+    return reason === "throw_in" || reason === "corner_kick" || reason === "goal_kick";
   }
 
   private tryTransition(state: MatchState, to: BallSimState, reason: string, out: BallTransition[]) {
