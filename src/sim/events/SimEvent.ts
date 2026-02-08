@@ -1,6 +1,26 @@
-﻿import type { BallSimState, DeckKind, TeamId } from "../state/MatchState";
+import type { BallSimState, DeckKind, TeamCommandType, TeamId } from "../state/MatchState";
 
 export type SimEvent =
+  | {
+      type: "team_command_activated";
+      atMs: number;
+      team: TeamId;
+      command: TeamCommandType;
+      durationMs: number;
+    }
+  | {
+      type: "team_command_expired";
+      atMs: number;
+      team: TeamId;
+      command: TeamCommandType;
+    }
+  | {
+      type: "momentum_changed";
+      atMs: number;
+      momentum: number;
+      byTeam: TeamId;
+      reason: string;
+    }
   | {
       type: "card_result";
       atMs: number;

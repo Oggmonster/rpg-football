@@ -26,9 +26,18 @@ export class AISystem {
       const sideFactor = teamId === "HOME" ? ballSide : -ballSide;
       const lineHeightBase = inPossession ? 0.56 : 0.45;
       const pressBase = inPossession ? 0.44 : 0.62;
+      const commandMods = state.teams[teamId].activeCommand?.modifiers;
+      const lineHeightDelta = commandMods?.lineHeightDelta ?? 0;
+      const pressDelta = commandMods?.pressIntensityDelta ?? 0;
 
-      state.teams[teamId].tactical.lineHeight = Math.max(0.3, Math.min(0.78, lineHeightBase + sideFactor * 0.14));
-      state.teams[teamId].tactical.pressIntensity = Math.max(0.25, Math.min(0.88, pressBase + sideFactor * 0.12));
+      state.teams[teamId].tactical.lineHeight = Math.max(
+        0.25,
+        Math.min(0.85, lineHeightBase + sideFactor * 0.14 + lineHeightDelta)
+      );
+      state.teams[teamId].tactical.pressIntensity = Math.max(
+        0.2,
+        Math.min(0.94, pressBase + sideFactor * 0.12 + pressDelta)
+      );
       state.teams[teamId].tactical.mentality = inPossession ? "ATTACKING" : "DEFENSIVE";
     }
   }
@@ -216,7 +225,8 @@ export class AISystem {
       return;
     }
 
-    if (passSystem.tryBestPass(state, team, ballSystem, true) && TUNING.runFrequency > 0.4) {
+    const runFrequency = TUNING.runFrequency + (state.teams[team].activeCommand?.modifiers.runFrequencyDelta ?? 0);
+    if (passSystem.tryBestPass(state, team, ballSystem, true) && runFrequency > 0.4) {
       carrier.intent = {
         type: "THROUGH_TO_DIRECTION",
         expiresAtMs: state.timeMs + 800,

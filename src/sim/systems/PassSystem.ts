@@ -55,6 +55,21 @@ export class PassSystem {
     }
 
     if (!bestTarget) return false;
-    return ballSystem.passTo(state, bestTarget);
+    const momentumAdv = team === "HOME" ? state.momentum : -state.momentum;
+    const commandBonus = state.teams[team].activeCommand?.modifiers.passBonus ?? 0;
+    const passQuality = (carrier.stats.pas + carrier.stats.dri) / 220;
+    const successChance = Math.max(0.35, Math.min(0.98, 0.7 + passQuality * 0.22 + momentumAdv * 0.08 + commandBonus));
+    const deterministicRoll = Math.abs(Math.sin(state.timeMs * 0.00031 + carrier.pos.x * 0.013 + carrier.pos.y * 0.021));
+    const passSuccess = deterministicRoll < successChance;
+    const jitterSeed = Math.sin(state.timeMs * 0.00047 + carrier.pos.x * 0.017 + carrier.pos.y * 0.019);
+    const jitterX = Math.sin(jitterSeed * 11.71) * 120;
+    const jitterY = Math.cos(jitterSeed * 9.13) * 90;
+    const target = passSuccess
+      ? bestTarget
+      : {
+          x: bestTarget.x + jitterX,
+          y: bestTarget.y + jitterY,
+        };
+    return ballSystem.passTo(state, target);
   }
 }

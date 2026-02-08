@@ -29,6 +29,7 @@ import type {
   MatchState,
   PlayerRole,
   PlayerStats,
+  TeamCommandType,
   TeamId,
   Vec2,
 } from "./state/MatchState";
@@ -38,6 +39,7 @@ import { InterceptSystem } from "./systems/InterceptSystem";
 import { MovementSystem } from "./systems/MovementSystem";
 import { PassSystem } from "./systems/PassSystem";
 import { TackleSystem } from "./systems/TackleSystem";
+import { getTeamCommandDef } from "./teamCommands/TeamCommandCatalog";
 
 type CatalogJson = { cards: CardDef[] };
 
@@ -58,6 +60,7 @@ export class MatchSim {
   private tackleSystem: TackleSystem;
   private eventQueue: SimEvent[] = [];
   private playerTeam: TeamId = "HOME";
+  private rng: RNG;
   private attackCatalogIds: string[];
   private defenseCatalogIds: string[];
 
@@ -70,6 +73,7 @@ export class MatchSim {
   constructor(state: MatchState, attackCatalog: CardCatalog, defenseCatalog: CardCatalog) {
     this.state = state;
     this.resolver = new CardResolver(attackCatalog, defenseCatalog);
+    this.rng = new RNG(state.rngSeed ^ 0x73f3);
     this.ballSystem = new BallSystem(state.rngSeed);
     this.aiSystem = new AISystem();
     this.passSystem = new PassSystem();
@@ -163,6 +167,21 @@ export class MatchSim {
       for (const [id, cd] of Object.entries(team.cooldowns)) {
         team.cooldowns[id] = Math.max(0, cd - dtMs);
       }
+      if (team.activeCommand) {
+        team.activeCommand.remainingMs = Math.max(0, team.activeCommand.remainingMs - dtMs);
+        if (team.activeCommand.remainingMs === 0) {
+          this.emit(
+            {
+              type: "team_command_expired",
+              atMs: this.state.timeMs,
+              team: team.id,
+              command: team.activeCommand.type,
+            },
+            stepEvents
+          );
+          team.activeCommand = null;
+        }
+      }
     }
 
     this.expireIntents();
@@ -189,6 +208,7 @@ export class MatchSim {
         const scoringTeam = this.state.ball.lastTouchTeam;
         this.state.flow.goalResetMsRemaining = 1500;
         this.state.flow.restartTeam = scoringTeam === "HOME" ? "AWAY" : "HOME";
+        this.adjustMomentum(scoringTeam, 0.22, "goal_scored", stepEvents);
         this.emit(
           {
             type: "goal_scored",
@@ -217,6 +237,13 @@ export class MatchSim {
     }
 
     if (prevPossession !== this.state.possession.team && this.state.possession.team !== "NEUTRAL") {
+      const winner = this.state.possession.team;
+      const active = this.state.teams[winner].activeCommand;
+      if (active?.type === "FAST_COUNTER" && this.state.ball.state === "CARRIED") {
+        this.adjustMomentum(winner, 0.02, "fast_counter_trigger", stepEvents);
+        this.ballSystem.grantCarrierProtection(this.state, 320);
+      }
+      this.adjustMomentum(this.state.possession.team, 0.025, "possession_won", stepEvents);
       this.emit(
         {
           type: "possession_changed",
@@ -248,6 +275,7 @@ export class MatchSim {
       home: this.state.score.HOME,
       away: this.state.score.AWAY,
     });
+    this.adjustMomentum(team, 0.22, "goal_scored");
   }
 
   resetMatch(nextSeed?: number) {
@@ -266,6 +294,7 @@ export class MatchSim {
 
     this.ballSystem = new BallSystem(seed);
     this.tackleSystem = new TackleSystem(seed);
+    this.rng = new RNG(seed ^ 0x73f3);
 
     this.drawUpTo(this.state.teams.HOME.deckAttack, this.state.teams.HOME.handAttack, HAND_SIZE);
     this.drawUpTo(this.state.teams.HOME.deckDefense, this.state.teams.HOME.handDefense, HAND_SIZE);
@@ -312,6 +341,69 @@ export class MatchSim {
   getActiveHandCardIds(): string[] {
     const team = this.state.teams[this.playerTeam];
     return this.getActiveDeckKind() === "ATTACK" ? team.handAttack.cards : team.handDefense.cards;
+  }
+
+  getMomentum(): number {
+    return this.state.momentum;
+  }
+
+  getTeamCommandsForUi(team: TeamId = this.playerTeam) {
+    const active = this.state.teams[team].activeCommand;
+    return this.state.teams[team].teamCommands.map((slot) => {
+      const def = getTeamCommandDef(slot.type);
+      return {
+        type: slot.type,
+        label: def.label,
+        used: slot.used,
+        active: active?.type === slot.type,
+        remainingMs: active?.type === slot.type ? active.remainingMs : 0,
+      };
+    });
+  }
+
+  playTeamCommand(type: TeamCommandType): boolean {
+    const team = this.playerTeam;
+    const teamState = this.state.teams[team];
+    if (this.state.phase === "ENDED") {
+      this.lastActionMessage = "Match ended";
+      return false;
+    }
+    if (this.state.flow.goalResetMsRemaining > 0) {
+      this.lastActionMessage = "Restart in progress";
+      return false;
+    }
+    const slot = teamState.teamCommands.find((s) => s.type === type);
+    if (!slot) {
+      this.lastActionMessage = "Command not equipped";
+      return false;
+    }
+    if (slot.used) {
+      this.lastActionMessage = "Command already used";
+      return false;
+    }
+    if (teamState.activeCommand) {
+      this.lastActionMessage = "Another command is active";
+      return false;
+    }
+
+    const def = getTeamCommandDef(type);
+    teamState.activeCommand = {
+      type,
+      durationMs: def.durationMs,
+      remainingMs: def.durationMs,
+      modifiers: { ...def.modifiers },
+    };
+    slot.used = true;
+    this.adjustMomentum(team, 0.04, `team_command_${type.toLowerCase()}`);
+    this.emit({
+      type: "team_command_activated",
+      atMs: this.state.timeMs,
+      team,
+      command: type,
+      durationMs: def.durationMs,
+    });
+    this.lastActionMessage = `${def.label} activated`;
+    return true;
   }
 
   getActivePlayerForUi() {
@@ -381,6 +473,7 @@ export class MatchSim {
       this.lastActionMessage = "Card unavailable (cooldown/lockout/context)";
       this.lastCardDebugLine = `${cardId} -> N/A -> rejected: cooldown_lockout_context`;
       this.emitCardResult(team, cardId, cardMeta?.type, false, "cooldown/lockout/context");
+      this.adjustMomentum(team, -0.01, "card_rejected_cooldown");
       return false;
     }
 
@@ -391,8 +484,12 @@ export class MatchSim {
       this.lastActionMessage = "Card had no valid target";
       this.lastCardDebugLine = `${cardId} -> ${card.type} -> rejected: invalid_target`;
       this.emitCardResult(team, cardId, card.type, false, "no valid target");
+      this.adjustMomentum(team, -0.015, "card_invalid_target");
       return false;
     }
+
+    const cooldownAfterPlay = teamState.cooldowns[cardId] ?? 0;
+    teamState.cooldowns[cardId] = this.applyCooldownModifiers(team, cooldownAfterPlay);
 
     hand.cards.splice(idx, 1);
     deck.draw.push(cardId);
@@ -406,6 +503,7 @@ export class MatchSim {
       deck: activeDeck,
     });
     this.emitCardResult(team, cardId, card.type, true, "executed");
+    this.adjustMomentum(team, this.getCardMomentumDelta(card.type), `card_${card.type.toLowerCase()}`);
 
     this.lastActionMessage = "";
     this.lastCardDebugLine = `${cardId} -> ${card.type} -> played`;
@@ -466,6 +564,82 @@ export class MatchSim {
     });
   }
 
+  private getMomentumAdvantage(team: TeamId): number {
+    return team === "HOME" ? this.state.momentum : -this.state.momentum;
+  }
+
+  private getTeamCommandModifiers(team: TeamId) {
+    return this.state.teams[team].activeCommand?.modifiers ?? null;
+  }
+
+  private getCardMomentumDelta(cardType: CardDef["type"]): number {
+    switch (cardType) {
+      case "PASS":
+      case "THROUGH_PASS":
+      case "LONG_BALL":
+      case "CROSS":
+        return 0.012;
+      case "DRIBBLE":
+      case "RUSH":
+        return 0.01;
+      case "SHOOT":
+        return 0.02;
+      case "TACKLE":
+      case "PRESS":
+      case "INTERCEPT":
+      case "COVER":
+        return 0.015;
+      default:
+        return 0.008;
+    }
+  }
+
+  private applyCooldownModifiers(team: TeamId, cooldownMs: number): number {
+    const momentumAdv = this.getMomentumAdvantage(team);
+    const momentumFactor = Math.max(0.75, Math.min(1.2, 1 - momentumAdv * 0.15));
+    const commandFactor = this.getTeamCommandModifiers(team)?.cooldownMultiplier ?? 1;
+    return Math.max(180, cooldownMs * momentumFactor * commandFactor);
+  }
+
+  private adjustMomentum(team: TeamId, delta: number, reason: string, stepEvents?: SimEvent[]) {
+    const signedDelta = team === "HOME" ? delta : -delta;
+    const prev = this.state.momentum;
+    const next = Math.max(-1, Math.min(1, prev + signedDelta));
+    if (Math.abs(next - prev) < 0.0001) return;
+    this.state.momentum = next;
+    this.emit(
+      {
+        type: "momentum_changed",
+        atMs: this.state.timeMs,
+        momentum: next,
+        byTeam: team,
+        reason,
+      },
+      stepEvents
+    );
+  }
+
+  private getActionSuccessChance(team: TeamId, carrierStats: PlayerStats, kind: "PASS" | "SHOT" | "DRIBBLE"): number {
+    const adv = this.getMomentumAdvantage(team);
+    const cmd = this.getTeamCommandModifiers(team);
+    const passBonus = cmd?.passBonus ?? 0;
+    const shotBonus = cmd?.shotBonus ?? 0;
+    switch (kind) {
+      case "PASS": {
+        const base = 0.78 + (carrierStats.pas + carrierStats.dri) / 360;
+        return Math.max(0.45, Math.min(0.98, base + adv * 0.08 + passBonus));
+      }
+      case "SHOT": {
+        const base = 0.4 + carrierStats.sho / 170;
+        return Math.max(0.18, Math.min(0.92, base + adv * 0.11 + shotBonus));
+      }
+      case "DRIBBLE": {
+        const base = 0.62 + (carrierStats.dri + carrierStats.pac) / 420;
+        return Math.max(0.28, Math.min(0.96, base + adv * 0.08));
+      }
+    }
+  }
+
   private recordDebugFrame(stepEvents: SimEvent[]) {
     this.tickCount += 1;
     this.debugFrames.push(compactStateFrame(this.state, this.tickCount, stepEvents));
@@ -506,6 +680,15 @@ export class MatchSim {
     }
     const dir = this.resolveInputDirection(team, input.direction);
     return this.clampToPitch({ x: from.x + dir.x * distance, y: from.y + dir.y * distance });
+  }
+
+  private jitterTarget(target: Vec2, radiusPx: number): Vec2 {
+    const angle = this.rng.next() * Math.PI * 2;
+    const mag = this.rng.next() * radiusPx;
+    return this.clampToPitch({
+      x: target.x + Math.cos(angle) * mag,
+      y: target.y + Math.sin(angle) * mag,
+    });
   }
 
   private applyCardEffect(team: TeamId, card: CardDef, _input: CardInput) {
@@ -609,15 +792,20 @@ export class MatchSim {
         : null) ?? this.pickTeammateByDirection(team, carrier.id, input.direction, 12, 360);
     const targetPos = targetedMate?.pos ?? this.resolveAimTarget(carrier.pos, team, input, 170);
 
+    const passChance = this.getActionSuccessChance(team, carrier.stats, "PASS");
+    const passSuccess = this.rng.next() <= passChance;
+    const resolvedTarget = passSuccess ? targetPos : this.jitterTarget(targetPos, 140);
+
     carrier.intent = {
       type: "PASS_TO_DIRECTION",
       targetPlayerId: targetedMate?.id,
-      targetPos: { x: targetPos.x, y: targetPos.y },
+      targetPos: { x: resolvedTarget.x, y: resolvedTarget.y },
       expiresAtMs: this.state.timeMs + 700,
       priority: 100,
     };
-    const ok = this.ballSystem.passTo(this.state, targetPos);
+    const ok = this.ballSystem.passTo(this.state, resolvedTarget);
     if (!ok) return false;
+    this.adjustMomentum(team, passSuccess ? 0.01 : -0.018, passSuccess ? "pass_complete" : "pass_mishit");
     this.ballSystem.grantCarrierProtection(this.state, 260);
     return true;
   }
@@ -631,15 +819,20 @@ export class MatchSim {
         : null) ?? this.pickTeammateByDirection(team, carrier.id, input.direction, 60, 760);
     const targetPos = targetedMate?.pos ?? this.resolveAimTarget(carrier.pos, team, input, 290);
 
+    const passChance = this.getActionSuccessChance(team, carrier.stats, "PASS") - 0.1;
+    const passSuccess = this.rng.next() <= passChance;
+    const resolvedTarget = passSuccess ? targetPos : this.jitterTarget(targetPos, 190);
+
     carrier.intent = {
       type: "THROUGH_TO_DIRECTION",
       targetPlayerId: targetedMate?.id,
-      targetPos: { x: targetPos.x, y: targetPos.y },
+      targetPos: { x: resolvedTarget.x, y: resolvedTarget.y },
       expiresAtMs: this.state.timeMs + 850,
       priority: 100,
     };
-    const ok = this.ballSystem.passTo(this.state, targetPos);
+    const ok = this.ballSystem.passTo(this.state, resolvedTarget);
     if (!ok) return false;
+    this.adjustMomentum(team, passSuccess ? 0.012 : -0.022, passSuccess ? "through_complete" : "through_mishit");
     return true;
   }
 
@@ -655,14 +848,19 @@ export class MatchSim {
       : { x: boxCenterX, y: this.resolveAimTarget(carrier.pos, team, input, 220).y };
     const target = targetedMate ? { x: targetedMate.pos.x, y: targetedMate.pos.y } : fallback;
 
+    const passChance = this.getActionSuccessChance(team, carrier.stats, "PASS") - 0.06;
+    const passSuccess = this.rng.next() <= passChance;
+    const resolvedTarget = passSuccess ? target : this.jitterTarget(target, 170);
+
     carrier.intent = {
       type: "THROUGH_TO_DIRECTION",
-      targetPos: target,
+      targetPos: resolvedTarget,
       expiresAtMs: this.state.timeMs + 900,
       priority: 100,
     };
-    const ok = this.ballSystem.passTo(this.state, target);
+    const ok = this.ballSystem.passTo(this.state, resolvedTarget);
     if (!ok) return false;
+    this.adjustMomentum(team, passSuccess ? 0.012 : -0.02, passSuccess ? "cross_complete" : "cross_mishit");
     return true;
   }
 
@@ -694,12 +892,15 @@ export class MatchSim {
       input.direction || input.targetPos
         ? this.resolveAimTarget(carrier.pos, team, input, 150)
         : this.findOpenRunTarget(carrier.pos, team, 140);
+    const success = this.rng.next() <= this.getActionSuccessChance(team, carrier.stats, "DRIBBLE");
+    const resolvedTarget = success ? target : this.jitterTarget(target, 110);
     carrier.intent = {
       type: "DRIBBLE_TO_DIRECTION",
-      targetPos: target,
+      targetPos: resolvedTarget,
       expiresAtMs: this.state.timeMs + 800,
       priority: 100,
     };
+    this.adjustMomentum(team, success ? 0.009 : -0.014, success ? "dribble_success" : "dribble_heavy_touch");
     this.ballSystem.grantCarrierProtection(this.state, 700);
     return true;
   }
@@ -712,13 +913,20 @@ export class MatchSim {
     const dist = Math.hypot(goal.x - carrier.pos.x, goal.y - carrier.pos.y);
     const inGoodLane = this.isInOppPenaltyArea(carrier.pos, team) || dist < 250;
     if (aimedShot || inGoodLane) {
+      const shotChance = this.getActionSuccessChance(team, carrier.stats, "SHOT");
+      const shotOnTarget = this.rng.next() <= shotChance;
+      const shotTarget = shotOnTarget ? goal : this.jitterTarget(goal, 160);
       carrier.intent = {
         type: "SHOOT_TO_DIRECTION",
-        targetPos: goal,
+        targetPos: shotTarget,
         expiresAtMs: this.state.timeMs + 500,
         priority: 100,
       };
-      return this.ballSystem.shootTo(this.state, goal);
+      const fired = this.ballSystem.shootTo(this.state, shotTarget);
+      if (fired) {
+        this.adjustMomentum(team, shotOnTarget ? 0.02 : -0.02, shotOnTarget ? "shot_on_target" : "shot_off_target");
+      }
+      return fired;
     }
 
     const betterX = team === "HOME" ? Math.min(PITCH_RIGHT - 90, carrier.pos.x + 90) : Math.max(PITCH_LEFT + 90, carrier.pos.x - 90);
@@ -741,6 +949,13 @@ export class MatchSim {
     });
     const result = this.tackleSystem.tryCardTackle(this.state, team, this.ballSystem, mode, preferredTarget?.id);
     this.lastActionMessage = result === "MISS" ? "Tackle: closing down" : `Tackle ${result.toLowerCase()}`;
+    const deltaByResult: Record<typeof result, number> = {
+      WIN: 0.022,
+      LOOSE: 0.008,
+      FOUL: -0.03,
+      MISS: -0.012,
+    };
+    this.adjustMomentum(team, deltaByResult[result], `tackle_${result.toLowerCase()}`);
     return true;
   }
 
@@ -758,6 +973,7 @@ export class MatchSim {
       expiresAtMs: this.state.timeMs + 1200,
       priority: 95,
     };
+    this.adjustMomentum(team, 0.006, "press_triggered");
     return true;
   }
 

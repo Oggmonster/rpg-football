@@ -3,6 +3,7 @@ import type { FormationPresetId } from "../config/FormationConfig";
 export type TeamId = "HOME" | "AWAY";
 export type DeckKind = "ATTACK" | "DEFENSE";
 export type MatchPhase = "KICKOFF" | "LIVE" | "ENDED";
+export type TeamCommandType = "ALL_OUT_ATTACK" | "PARK_THE_BUS" | "FAST_COUNTER" | "HIGH_PRESS" | "SLOW_BUILD_UP";
 export type BallSimState =
   | "KICKOFF"
   | "CARRIED"
@@ -89,6 +90,28 @@ export interface TeamTacticalState {
   formation: FormationPresetId;
 }
 
+export interface TeamCommandModifiers {
+  lineHeightDelta: number;
+  pressIntensityDelta: number;
+  runFrequencyDelta: number;
+  passBonus: number;
+  shotBonus: number;
+  tackleBonus: number;
+  cooldownMultiplier: number;
+}
+
+export interface ActiveTeamCommandState {
+  type: TeamCommandType;
+  durationMs: number;
+  remainingMs: number;
+  modifiers: TeamCommandModifiers;
+}
+
+export interface TeamCommandSlotState {
+  type: TeamCommandType;
+  used: boolean;
+}
+
 export interface TeamState {
   id: TeamId;
   deckAttack: DeckState;
@@ -99,6 +122,8 @@ export interface TeamState {
   lockoutMs: number;
   playerIds: string[];
   tactical: TeamTacticalState;
+  teamCommands: TeamCommandSlotState[];
+  activeCommand: ActiveTeamCommandState | null;
 }
 
 export interface MatchFlowState {
@@ -113,6 +138,7 @@ export interface MatchState {
   rngSeed: number;
   teamSize: number;
   score: Record<TeamId, number>;
+  momentum: number;
   possession: PossessionState;
   teams: Record<TeamId, TeamState>;
   players: Record<string, PlayerState>;

@@ -2,6 +2,7 @@ import { DEFAULT_TEAM_SIZE, MATCH_DURATION_MS } from "../config/MatchConfig";
 import { DEFAULT_FORMATION } from "../config/FormationConfig";
 import { PITCH_CENTER_X, PITCH_HEIGHT, PITCH_TOP } from "../config/PitchConfig";
 import { RNG } from "../math/RNG";
+import { DEFAULT_TEAM_COMMAND_LOADOUT } from "../teamCommands/TeamCommandCatalog";
 import type {
   DeckState,
   HandState,
@@ -134,6 +135,8 @@ function createTeamState(id: TeamId, decks: InitialDecks, playerIds: string[]): 
       lineHeight: 0.5,
       formation: DEFAULT_FORMATION,
     },
+    teamCommands: DEFAULT_TEAM_COMMAND_LOADOUT.map((type) => ({ type, used: false })),
+    activeCommand: null,
   };
 }
 
@@ -155,6 +158,7 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
     rngSeed: args.rngSeed,
     teamSize,
     score: { HOME: 0, AWAY: 0 },
+    momentum: 0,
     possession: {
       team: "HOME",
       lastTouchTeam: "HOME",

@@ -36,9 +36,21 @@ export class TackleSystem {
       const intentScale = intentType === "TACKLE_TARGET" ? 1 : 0.58;
       const protectionScale = protectedBall ? 0.62 : 1;
       const spacingScale = Math.max(0.55, 1 - distanceToCarrier / 30);
+      const momentumAdv = defendingTeam === "HOME" ? state.momentum : -state.momentum;
+      const commandBonus = state.teams[defendingTeam].activeCommand?.modifiers.tackleBonus ?? 0;
       const chance = Math.max(
         0.012,
-        Math.min(0.52, base * (0.72 + TUNING.tackleAggression) * dt * 4.8 * intentScale * protectionScale * spacingScale)
+        Math.min(
+          0.68,
+          base *
+            (0.72 + TUNING.tackleAggression) *
+            (1 + commandBonus + momentumAdv * 0.18) *
+            dt *
+            4.8 *
+            intentScale *
+            protectionScale *
+            spacingScale
+        )
       );
 
       if (this.rng.next() < chance) {
@@ -92,9 +104,14 @@ export class TackleSystem {
     const atk = carrier.stats.dri * 0.6 + carrier.stats.pac * 0.4;
     const def = defender.stats.def * 0.62 + defender.stats.phy * 0.38;
     const diff = (def - atk) / 200;
+    const momentumAdv = defendingTeam === "HOME" ? state.momentum : -state.momentum;
+    const commandBonus = state.teams[defendingTeam].activeCommand?.modifiers.tackleBonus ?? 0;
 
     const foulChance = Math.max(0.04, Math.min(0.35, (mode === "SLIDING" ? 0.17 : 0.08) - diff * 0.05));
-    const winChance = Math.max(0.12, Math.min(0.72, (mode === "SLIDING" ? 0.33 : 0.42) + diff));
+    const winChance = Math.max(
+      0.12,
+      Math.min(0.82, (mode === "SLIDING" ? 0.33 : 0.42) + diff + commandBonus * 0.3 + momentumAdv * 0.12)
+    );
     const looseChance = Math.max(0.08, Math.min(0.5, mode === "SLIDING" ? 0.28 : 0.2));
 
     const roll = this.rng.next();

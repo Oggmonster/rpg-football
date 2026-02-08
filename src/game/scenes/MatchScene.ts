@@ -21,6 +21,7 @@ import { DirectionPad } from "../ui/DirectionPad";
 import { HandView } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
 import { PerfOverlay } from "../ui/PerfOverlay";
+import { TeamCommandPanel } from "../ui/TeamCommandPanel";
 import { MatchView } from "../view/MatchView";
 
 type CatalogJson = { cards: CardDef[] };
@@ -29,6 +30,7 @@ export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
   private directionPad!: DirectionPad;
+  private teamCommandPanel!: TeamCommandPanel;
   private activePlayerPanel!: ActivePlayerPanel;
   private hud!: Hud;
   private perf!: PerfOverlay;
@@ -114,6 +116,16 @@ export class MatchScene extends Phaser.Scene {
     });
     this.directionPad.setDepth(40);
 
+    this.teamCommandPanel = new TeamCommandPanel(this, this.scale.width - 226, sceneH - 206, (type) => {
+      const ok = this.sim.playTeamCommand(type);
+      if (!ok) {
+        const reason = this.sim.getLastActionMessage() || "Command unavailable";
+        this.showFeedback(reason);
+      }
+      this.refreshTeamCommands();
+    });
+    this.teamCommandPanel.setDepth(40);
+
     this.feedbackText = this.add
       .text(16, 532, "", {
         fontFamily: "monospace",
@@ -134,9 +146,10 @@ export class MatchScene extends Phaser.Scene {
       .setAlpha(0);
 
     this.refreshHand();
+    this.refreshTeamCommands();
 
     this.helpText = this.add
-      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card", {
+      .text(16, 44, "P: toggle possession | ESC: menu | F3: perf | Click card or command", {
         fontFamily: "monospace",
         fontSize: "12px",
         color: "#eafff6",
@@ -197,10 +210,17 @@ export class MatchScene extends Phaser.Scene {
     this.hud.updateFromState(state);
     this.activePlayerPanel.updatePlayer(this.sim.getActivePlayerForUi());
     this.refreshHand();
+    this.refreshTeamCommands();
 
     const events = this.sim.drainEvents();
     if (events.length > 0) {
       for (const e of events) {
+        if (e.type === "team_command_activated") {
+          this.showFeedback(`Command: ${e.command}`);
+        }
+        if (e.type === "team_command_expired") {
+          this.showFeedback(`${e.command} expired`);
+        }
         if (e.type === "card_result") {
           const prefix = e.cardType ?? e.cardId;
           const msg = e.success ? `${prefix}: ${e.reason}` : `${prefix}: ${e.reason}`;
@@ -257,6 +277,10 @@ export class MatchScene extends Phaser.Scene {
     }
 
     this.handView.setCards(cardIds, cardState);
+  }
+
+  private refreshTeamCommands() {
+    this.teamCommandPanel.setCommands(this.sim.getTeamCommandsForUi());
   }
 
   private buildCardInput() {
@@ -345,6 +369,7 @@ export class MatchScene extends Phaser.Scene {
     this.perf.setScrollFactor(0);
     this.handView.setScrollFactor(0);
     this.directionPad.setScrollFactor(0);
+    this.teamCommandPanel.setScrollFactor(0);
     this.activePlayerPanel.setScrollFactor(0);
     this.feedbackText.setScrollFactor(0);
     this.helpText.setScrollFactor(0);
