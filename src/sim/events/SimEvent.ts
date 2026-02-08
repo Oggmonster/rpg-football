@@ -2,6 +2,15 @@
 
 export type SimEvent =
   | {
+      type: "card_result";
+      atMs: number;
+      team: TeamId;
+      cardId: string;
+      cardType?: string;
+      success: boolean;
+      reason: string;
+    }
+  | {
       type: "possession_changed";
       atMs: number;
       team: TeamId;

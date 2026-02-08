@@ -17,6 +17,7 @@ import type { CardDef } from "../../sim/cards/types";
 import { MatchSim } from "../../sim/MatchSim";
 import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
 import { ActivePlayerPanel } from "../ui/ActivePlayerPanel";
+import { DirectionPad } from "../ui/DirectionPad";
 import { HandView } from "../ui/HandView";
 import { Hud } from "../ui/Hud";
 import { PerfOverlay } from "../ui/PerfOverlay";
@@ -27,6 +28,7 @@ type CatalogJson = { cards: CardDef[] };
 export class MatchScene extends Phaser.Scene {
   private sim!: MatchSim;
   private handView!: HandView;
+  private directionPad!: DirectionPad;
   private activePlayerPanel!: ActivePlayerPanel;
   private hud!: Hud;
   private perf!: PerfOverlay;
@@ -39,6 +41,8 @@ export class MatchScene extends Phaser.Scene {
   private feedbackUntilMs = 0;
   private overlayVisible = false;
   private helpText!: Phaser.GameObjects.Text;
+  private aimText!: Phaser.GameObjects.Text;
+  private selectedDirection = { x: 1, y: 0 };
 
   constructor() {
     super("MatchScene");
@@ -76,7 +80,8 @@ export class MatchScene extends Phaser.Scene {
     this.perf.setDepth(21);
 
     this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
-      const ok = this.sim.playCard(cardId, {});
+      const cardInput = this.buildCardInput();
+      const ok = this.sim.playCard(cardId, cardInput);
       this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
       if (!ok) {
         this.handView.pulseInvalid(cardId);
@@ -102,6 +107,12 @@ export class MatchScene extends Phaser.Scene {
 
     this.activePlayerPanel = new ActivePlayerPanel(this, panelX, panelY);
     this.activePlayerPanel.setDepth(40);
+
+    this.directionPad = new DirectionPad(this, panelX + 248, panelY + 8, (dir) => {
+      this.selectedDirection = dir;
+      this.updateAimText();
+    });
+    this.directionPad.setDepth(40);
 
     this.feedbackText = this.add
       .text(16, 532, "", {
@@ -139,6 +150,15 @@ export class MatchScene extends Phaser.Scene {
         color: "#ffd791",
       })
       .setShadow(1, 1, "#000", 2);
+
+    this.aimText = this.add
+      .text(16, 80, "", {
+        fontFamily: "monospace",
+        fontSize: "12px",
+        color: "#a7d8ff",
+      })
+      .setShadow(1, 1, "#000", 2);
+    this.updateAimText();
 
     this.input.keyboard?.on("keydown-P", () => {
       this.sim.togglePossession();
@@ -181,15 +201,17 @@ export class MatchScene extends Phaser.Scene {
     const events = this.sim.drainEvents();
     if (events.length > 0) {
       for (const e of events) {
-        if (e.type === "card_played") {
-          this.showFeedback(`Played ${e.cardId}`);
-          this.announceText.setText(e.cardId).setScale(0.9).setAlpha(1);
+        if (e.type === "card_result") {
+          const prefix = e.cardType ?? e.cardId;
+          const msg = e.success ? `${prefix}: ${e.reason}` : `${prefix}: ${e.reason}`;
+          this.showFeedback(msg);
+          this.announceText.setText(msg).setScale(e.success ? 0.92 : 0.9).setAlpha(1);
           this.tweens.add({
             targets: this.announceText,
-            scaleX: 1.08,
-            scaleY: 1.08,
+            scaleX: e.success ? 1.04 : 1.02,
+            scaleY: e.success ? 1.04 : 1.02,
             alpha: 0,
-            duration: 520,
+            duration: e.success ? 500 : 620,
             ease: "Quad.easeOut",
           });
         }
@@ -235,6 +257,35 @@ export class MatchScene extends Phaser.Scene {
     }
 
     this.handView.setCards(cardIds, cardState);
+  }
+
+  private buildCardInput() {
+    const state = this.sim.getRenderState();
+    const actor = this.sim.getActivePlayerForUi();
+    const origin = actor?.pos ?? state.ball.pos;
+    const distance = 220;
+    const targetPos = {
+      x: origin.x + this.selectedDirection.x * distance,
+      y: origin.y + this.selectedDirection.y * distance,
+    };
+    return {
+      direction: { ...this.selectedDirection },
+      targetPos,
+    };
+  }
+
+  private updateAimText() {
+    if (!this.aimText) return;
+    const d = this.selectedDirection;
+    const label =
+      Math.abs(d.x) > Math.abs(d.y)
+        ? d.x > 0
+          ? "E"
+          : "W"
+        : d.y > 0
+        ? "S"
+        : "N";
+    this.aimText.setText(`Aim: ${label} (${d.x.toFixed(1)}, ${d.y.toFixed(1)})`);
   }
 
   private showFeedback(text: string) {
@@ -293,10 +344,12 @@ export class MatchScene extends Phaser.Scene {
     this.hud.setScrollFactor(0);
     this.perf.setScrollFactor(0);
     this.handView.setScrollFactor(0);
+    this.directionPad.setScrollFactor(0);
     this.activePlayerPanel.setScrollFactor(0);
     this.feedbackText.setScrollFactor(0);
     this.helpText.setScrollFactor(0);
     this.cardDebugText.setScrollFactor(0);
+    this.aimText.setScrollFactor(0);
   }
 
   private centerCameraOn(x: number, y: number, vx: number, vy: number, instant: boolean) {

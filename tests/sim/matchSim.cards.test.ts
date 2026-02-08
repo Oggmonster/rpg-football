@@ -104,4 +104,46 @@ describe("MatchSim card lifecycle and hand swap", () => {
     expect(ok).toBe(true);
     expect(sim.getLastCardDebugLine()).toContain("ATT_PASS_1 -> PASS -> played");
   });
+
+  test("uses directional input to set pass target", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 444,
+    });
+    const state = sim.getRenderState();
+    state.ball.state = "CARRIED";
+    state.teams.HOME.handAttack.cards[0] = "ATT_PASS_1";
+    const carrierBefore = state.players[state.ball.carrierId ?? state.teams.HOME.playerIds[0]].pos;
+
+    const ok = sim.playCard("ATT_PASS_1", { direction: { x: 0, y: -1 } });
+    expect(ok).toBe(true);
+    expect(state.ball.targetPos).not.toBeNull();
+    expect((state.ball.targetPos?.y ?? 0) < carrierBefore.y).toBe(true);
+  });
+
+  test("emits card_result events for success and failure", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 445,
+    });
+    const successCard = sim.getActiveHandCardIds()[0];
+    const ok = sim.playCard(successCard, { direction: { x: 1, y: 0 } });
+    expect(ok).toBe(true);
+
+    const successEvent = sim
+      .drainEvents()
+      .find((e) => e.type === "card_result" && e.cardId === successCard && e.success === true);
+    expect(successEvent).toBeTruthy();
+
+    sim.step(999999);
+    const blockedCard = sim.getActiveHandCardIds()[0];
+    const blocked = sim.playCard(blockedCard, { direction: { x: 1, y: 0 } });
+    expect(blocked).toBe(false);
+    const failEvent = sim
+      .drainEvents()
+      .find((e) => e.type === "card_result" && e.cardId === blockedCard && e.success === false);
+    expect(failEvent).toBeTruthy();
+  });
 });

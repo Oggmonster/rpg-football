@@ -55,11 +55,22 @@ export class TackleSystem {
     state: MatchState,
     defendingTeam: TeamId,
     ballSystem: BallSystem,
-    mode: "STANDING" | "SLIDING"
+    mode: "STANDING" | "SLIDING",
+    preferredTargetId?: string
   ): "FOUL" | "WIN" | "LOOSE" | "MISS" {
-    if (state.ball.state !== "CARRIED" || !state.ball.carrierId) return "MISS";
-    const carrier = state.players[state.ball.carrierId];
-    if (carrier.teamId === defendingTeam) return "MISS";
+    const resolvePreferredTarget = () => {
+      if (!preferredTargetId) return null;
+      const target = state.players[preferredTargetId];
+      if (!target || target.teamId === defendingTeam) return null;
+      return target;
+    };
+
+    let carrier = resolvePreferredTarget();
+    if (!carrier) {
+      if (state.ball.state !== "CARRIED" || !state.ball.carrierId) return "MISS";
+      carrier = state.players[state.ball.carrierId];
+      if (carrier.teamId === defendingTeam) return "MISS";
+    }
 
     let defenderId: string | null = null;
     let defenderDist = Number.POSITIVE_INFINITY;

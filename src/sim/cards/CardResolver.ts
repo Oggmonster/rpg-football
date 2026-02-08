@@ -5,6 +5,7 @@ import type { CardDef } from "./types";
 
 export interface CardInput {
   direction?: { x: number; y: number };
+  targetPos?: { x: number; y: number };
   targetPlayerId?: string;
 }
 
@@ -28,6 +29,10 @@ export class CardResolver {
     t.lockoutMs = CARD_LOCKOUT_MS;
 
     return card;
+  }
+
+  getCard(cardId: string): CardDef | null {
+    return this.findCard(cardId) ?? null;
   }
 
   private canPlay(match: MatchState, team: TeamId, card: CardDef): boolean {
