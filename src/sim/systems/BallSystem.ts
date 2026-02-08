@@ -54,6 +54,20 @@ function add(a: Vec2, b: Vec2): Vec2 {
   return { x: a.x + b.x, y: a.y + b.y };
 }
 
+function dot(a: Vec2, b: Vec2): number {
+  return a.x * b.x + a.y * b.y;
+}
+
+function segmentDistance(point: Vec2, a: Vec2, b: Vec2): number {
+  const ab = { x: b.x - a.x, y: b.y - a.y };
+  const ap = { x: point.x - a.x, y: point.y - a.y };
+  const abLenSq = ab.x * ab.x + ab.y * ab.y;
+  if (abLenSq < 0.0001) return distance(point, a);
+  const t = Math.max(0, Math.min(1, dot(ap, ab) / abLenSq));
+  const proj = { x: a.x + ab.x * t, y: a.y + ab.y * t };
+  return distance(point, proj);
+}
+
 export class BallSystem {
   private rng: RNG;
 
@@ -85,9 +99,19 @@ export class BallSystem {
       case "IN_FLIGHT":
       case "SHOT": {
         state.ball.pos = add(state.ball.pos, scale(state.ball.vel, dt));
+        const dampingPerSec = state.ball.state === "SHOT" ? 0.06 : 0.45;
+        const damp = Math.max(0.95, 1 - dampingPerSec * dt);
+        state.ball.vel = scale(state.ball.vel, damp);
+
+        if (this.tryLaneInterception(state, out)) {
+          break;
+        }
 
         if (state.ball.state === "SHOT") {
           if (this.tryKeeperSave(state, out)) {
+            break;
+          }
+          if (this.tryKeeperRushPickup(state, out)) {
             break;
           }
           const goal = this.goalTeamAtX(state.ball.pos.x, state.ball.pos.y);
@@ -118,6 +142,10 @@ export class BallSystem {
         state.ball.pos = add(state.ball.pos, scale(state.ball.vel, dt));
 
         if (this.handleOutOfPlay(state, out)) {
+          break;
+        }
+
+        if (this.tryKeeperRushPickup(state, out)) {
           break;
         }
 
@@ -227,18 +255,59 @@ export class BallSystem {
   private tryAutoReceiveOrLoose(state: MatchState, out: BallTransition[]) {
     const targetReached = state.ball.targetPos && distance(state.ball.pos, state.ball.targetPos) <= TUNING.arriveThresholdPx;
     const receiver = this.findNearestPlayer(state, TUNING.pickupRadiusPx);
+    const speed = Math.hypot(state.ball.vel.x, state.ball.vel.y);
+    const shotPickupReady = state.ball.state === "SHOT" && speed < 120;
 
-    if (receiver && (targetReached || state.ball.state === "SHOT")) {
+    if (receiver && (targetReached || shotPickupReady)) {
       this.assignCarrier(state, receiver.id);
       this.tryTransition(state, "CARRIED", "receiver_control", out);
       return;
     }
 
-    if (targetReached) {
+    if (targetReached || speed < 12) {
       state.ball.vel = { x: 0, y: 0 };
       state.ball.targetPos = null;
       this.tryTransition(state, "LOOSE", "no_control", out);
     }
+  }
+
+  private tryLaneInterception(state: MatchState, out: BallTransition[]): boolean {
+    if (!state.ball.targetPos) return false;
+    if (state.ball.state !== "IN_FLIGHT" && state.ball.state !== "SHOT") return false;
+    const interceptTeam: TeamId = state.ball.lastTouchTeam === "HOME" ? "AWAY" : "HOME";
+    const from = state.ball.pos;
+    const to = state.ball.targetPos;
+    const travel = { x: to.x - from.x, y: to.y - from.y };
+    const travelLen = Math.max(1, Math.hypot(travel.x, travel.y));
+    const travelDir = { x: travel.x / travelLen, y: travel.y / travelLen };
+
+    let bestId: string | null = null;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const id of state.teams[interceptTeam].playerIds) {
+      const p = state.players[id];
+      if (!p || p.role === "GK") continue;
+      const dLane = segmentDistance(p.pos, from, to);
+      const toDef = { x: p.pos.x - from.x, y: p.pos.y - from.y };
+      const ahead = dot(toDef, travelDir);
+      if (ahead < 18 || ahead > travelLen + 24) continue;
+      if (dLane > TUNING.interceptRadiusPx * 1.2) continue;
+      const laneScore = 1 - dLane / (TUNING.interceptRadiusPx * 1.2);
+      const reachScore = 1 - Math.min(1, Math.abs(ahead) / (travelLen + 1));
+      const score = laneScore * 0.7 + reachScore * 0.3 + (p.stats.def + p.stats.pac) / 220;
+      if (score > bestScore) {
+        bestScore = score;
+        bestId = id;
+      }
+    }
+    if (!bestId) return false;
+    const defender = state.players[bestId];
+    const speed = Math.max(1, Math.hypot(state.ball.vel.x, state.ball.vel.y));
+    const speedPenalty = Math.min(0.2, speed / 900);
+    const interceptChance = Math.max(0.14, Math.min(0.87, 0.36 + (defender.stats.def + defender.stats.pac) / 240 - speedPenalty));
+    if (this.rng.next() > interceptChance) return false;
+    this.assignCarrier(state, bestId);
+    this.tryTransition(state, "CARRIED", "lane_intercept", out);
+    return true;
   }
 
   private handleOutOfPlay(state: MatchState, out: BallTransition[]) {
@@ -281,6 +350,31 @@ export class BallSystem {
       this.tryTransition(state, "LOOSE", "keeper_parry", out);
     }
     return true;
+  }
+
+  private tryKeeperRushPickup(state: MatchState, out: BallTransition[]): boolean {
+    if (state.ball.state !== "LOOSE" && state.ball.state !== "IN_FLIGHT" && state.ball.state !== "SHOT") return false;
+    const ballSpeed = Math.hypot(state.ball.vel.x, state.ball.vel.y);
+    if (ballSpeed > 360) return false;
+
+    for (const teamId of ["HOME", "AWAY"] as const) {
+      const keeperId = state.teams[teamId].playerIds.find((id) => state.players[id].role === "GK");
+      if (!keeperId) continue;
+      const gk = state.players[keeperId];
+      const inRushZone = teamId === "HOME" ? state.ball.pos.x < PITCH_LEFT + 240 : state.ball.pos.x > PITCH_RIGHT - 240;
+      if (!inRushZone) continue;
+      const d = distance(gk.pos, state.ball.pos);
+      if (d > 64) continue;
+
+      const rushChance = Math.max(0.22, Math.min(0.9, 0.4 + gk.stats.def / 170 + gk.stats.pac / 260));
+      if (this.rng.next() > rushChance) continue;
+
+      this.assignCarrier(state, keeperId);
+      this.tryTransition(state, "CARRIED", "keeper_rush_pickup", out);
+      return true;
+    }
+
+    return false;
   }
 
   private isOutOfPlay(pos: Vec2): boolean {

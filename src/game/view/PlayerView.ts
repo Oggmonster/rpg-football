@@ -14,6 +14,7 @@ export class PlayerView {
   private scene: Phaser.Scene;
   private body: Phaser.GameObjects.Rectangle;
   private shadow: Phaser.GameObjects.Ellipse;
+  private focusRing: Phaser.GameObjects.Ellipse;
   private label: Phaser.GameObjects.Text;
   private stateLabel: Phaser.GameObjects.Text;
   private showAiDebug = false;
@@ -23,6 +24,7 @@ export class PlayerView {
     this.id = player.id;
 
     this.shadow = scene.add.ellipse(player.pos.x, player.pos.y + 5, 12, 4, 0x000000, 0.3);
+    this.focusRing = scene.add.ellipse(player.pos.x, player.pos.y, 20, 20, 0xffffff, 0).setStrokeStyle(1, 0x93ffe1, 0.85).setVisible(false);
     this.body = scene.add.rectangle(player.pos.x, player.pos.y, 10, 10, 0xffffff, 1);
     this.body.setStrokeStyle(1, 0x0f1311, 0.8);
 
@@ -49,16 +51,18 @@ export class PlayerView {
 
   destroy() {
     this.shadow.destroy();
+    this.focusRing.destroy();
     this.body.destroy();
     this.label.destroy();
     this.stateLabel.destroy();
   }
 
-  update(player: PlayerState, alpha: number, isBallCarrier = false) {
+  update(player: PlayerState, alpha: number, isBallCarrier = false, isActive = false) {
     const x = player.pos.x;
     const y = player.pos.y;
 
     this.shadow.setPosition(x, y + 5);
+    this.focusRing.setPosition(x, y);
     this.body.setPosition(x, y);
     this.label.setPosition(x, y - 11);
     this.stateLabel.setPosition(x, y + 14);
@@ -80,6 +84,13 @@ export class PlayerView {
     } else if (!isBallCarrier && intentType && hasDefensiveIntent(intentType)) {
       this.body.setScale(0.92, 1.12);
       this.body.setStrokeStyle(1, 0xff8f7f, 0.95);
+    }
+
+    this.focusRing.setVisible(isActive);
+    if (isActive) {
+      const pulse = 1 + Math.sin((this.scene.time.now + alpha * 20) * 0.02) * 0.07;
+      this.focusRing.setScale(pulse, pulse);
+      this.focusRing.setStrokeStyle(1, isBallCarrier ? 0xfff4a1 : 0x93ffe1, 0.92);
     }
 
     if (this.showAiDebug) {

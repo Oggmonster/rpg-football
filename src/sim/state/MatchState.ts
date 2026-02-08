@@ -2,7 +2,7 @@ import type { FormationPresetId } from "../config/FormationConfig";
 
 export type TeamId = "HOME" | "AWAY";
 export type DeckKind = "ATTACK" | "DEFENSE";
-export type MatchPhase = "KICKOFF" | "LIVE" | "ENDED";
+export type MatchPhase = "KICKOFF" | "LIVE" | "HALFTIME" | "ENDED";
 export type TeamCommandType = "ALL_OUT_ATTACK" | "PARK_THE_BUS" | "FAST_COUNTER" | "HIGH_PRESS" | "SLOW_BUILD_UP";
 export type BallSimState =
   | "KICKOFF"
@@ -140,6 +140,8 @@ export interface TeamState {
 export interface MatchFlowState {
   goalResetMsRemaining: number;
   restartTeam: TeamId | null;
+  halftimeTaken: boolean;
+  halftimeMsRemaining: number;
 }
 
 export interface MatchState {

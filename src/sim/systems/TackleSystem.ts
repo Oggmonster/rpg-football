@@ -7,6 +7,20 @@ function dist(a: { x: number; y: number }, b: { x: number; y: number }): number 
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function inTackleArc(
+  defender: { teamId: TeamId; pos: { x: number; y: number } },
+  target: { pos: { x: number; y: number } },
+  halfAngleDeg: number
+) {
+  const facing = defender.teamId === "HOME" ? { x: 1, y: 0 } : { x: -1, y: 0 };
+  const to = { x: target.pos.x - defender.pos.x, y: target.pos.y - defender.pos.y };
+  const mag = Math.hypot(to.x, to.y);
+  if (mag < 0.0001) return true;
+  const n = { x: to.x / mag, y: to.y / mag };
+  const dot = facing.x * n.x + facing.y * n.y;
+  return dot >= Math.cos((halfAngleDeg * Math.PI) / 180);
+}
+
 export class TackleSystem {
   private rng: RNG;
 
@@ -29,6 +43,7 @@ export class TackleSystem {
       const distanceToCarrier = dist(defender.pos, carrier.pos);
       const engageRange = intentType === "TACKLE_TARGET" ? 30 : 22;
       if (distanceToCarrier > engageRange) continue;
+      if (!inTackleArc(defender, carrier, intentType === "TACKLE_TARGET" ? 78 : 95)) continue;
 
       const atk = carrier.stats.dri * 0.65 + carrier.stats.pac * 0.35;
       const def = defender.stats.def * 0.6 + defender.stats.phy * 0.4;
@@ -100,6 +115,7 @@ export class TackleSystem {
     const defender = state.players[defenderId];
     const reach = mode === "SLIDING" ? 30 : 18;
     if (defenderDist > reach) return "MISS";
+    if (!inTackleArc(defender, carrier, mode === "SLIDING" ? 92 : 72)) return "MISS";
 
     const atk = carrier.stats.dri * 0.6 + carrier.stats.pac * 0.4;
     const def = defender.stats.def * 0.62 + defender.stats.phy * 0.38;

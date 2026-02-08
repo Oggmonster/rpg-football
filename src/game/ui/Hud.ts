@@ -98,6 +98,11 @@ export class Hud extends Phaser.GameObjects.Container {
       return;
     }
 
+    if (state.phase === "HALFTIME") {
+      this.statusText.setText(`HALFTIME ${Math.ceil(state.flow.halftimeMsRemaining / 1000)}s`);
+      return;
+    }
+
     if (state.flow.goalResetMsRemaining > 0) {
       this.statusText.setText(`RESET ${Math.ceil(state.flow.goalResetMsRemaining / 1000)}s`);
       return;

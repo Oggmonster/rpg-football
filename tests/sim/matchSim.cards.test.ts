@@ -146,4 +146,20 @@ describe("MatchSim card lifecycle and hand swap", () => {
       .find((e) => e.type === "card_result" && e.cardId === blockedCard && e.success === false);
     expect(failEvent).toBeTruthy();
   });
+
+  test("blocks card play during halftime", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 446,
+    });
+    sim.step(120000);
+    const state = sim.getRenderState();
+    expect(state.phase).toBe("HALFTIME");
+
+    const card = sim.getActiveHandCardIds()[0];
+    const ok = sim.playCard(card, { direction: { x: 1, y: 0 } });
+    expect(ok).toBe(false);
+    expect(sim.getLastActionMessage()).toContain("Halftime");
+  });
 });

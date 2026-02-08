@@ -182,6 +182,8 @@ export function createInitialMatchState(args: CreateInitialMatchStateArgs): Matc
     flow: {
       goalResetMsRemaining: 0,
       restartTeam: null,
+      halftimeTaken: false,
+      halftimeMsRemaining: 0,
     },
   };
 }

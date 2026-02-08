@@ -136,16 +136,41 @@ export class MatchSim {
   step(dtMs: number) {
     const stepEvents: SimEvent[] = [];
     const prevPossession = this.state.possession.team;
+    const halftimeAtMs = Math.floor(this.state.durationMs / 2);
 
     this.state.timeMs = Math.min(this.state.timeMs + dtMs, this.state.durationMs);
     if (this.state.phase === "KICKOFF" && this.state.timeMs > 0) {
       this.state.phase = "LIVE";
+    }
+    if (
+      this.state.phase === "LIVE" &&
+      !this.state.flow.halftimeTaken &&
+      this.state.timeMs >= halftimeAtMs &&
+      this.state.timeMs < this.state.durationMs
+    ) {
+      this.state.phase = "HALFTIME";
+      this.state.flow.halftimeTaken = true;
+      this.state.flow.halftimeMsRemaining = 2000;
+      this.recoverStaminaAtHalf();
+      this.clearAllIntents();
+      this.recordDebugFrame(stepEvents);
+      return;
     }
     if (this.state.timeMs >= this.state.durationMs) {
       this.state.phase = "ENDED";
     }
 
     if (this.state.phase === "ENDED") {
+      this.recordDebugFrame(stepEvents);
+      return;
+    }
+
+    if (this.state.phase === "HALFTIME") {
+      this.state.flow.halftimeMsRemaining = Math.max(0, this.state.flow.halftimeMsRemaining - dtMs);
+      if (this.state.flow.halftimeMsRemaining === 0) {
+        this.forceKickoff("AWAY");
+        this.state.phase = "LIVE";
+      }
       this.recordDebugFrame(stepEvents);
       return;
     }
@@ -371,6 +396,10 @@ export class MatchSim {
       this.lastActionMessage = "Match ended";
       return false;
     }
+    if (this.state.phase === "HALFTIME") {
+      this.lastActionMessage = "Halftime adjustments";
+      return false;
+    }
     if (this.state.flow.goalResetMsRemaining > 0) {
       this.lastActionMessage = "Restart in progress";
       return false;
@@ -437,6 +466,12 @@ export class MatchSim {
       this.lastActionMessage = "Match ended";
       this.lastCardDebugLine = `${cardId} -> N/A -> blocked: match ended`;
       this.emitCardResult(team, cardId, cardMeta?.type, false, "match ended");
+      return false;
+    }
+    if (this.state.phase === "HALFTIME") {
+      this.lastActionMessage = "Halftime adjustments";
+      this.lastCardDebugLine = `${cardId} -> N/A -> blocked: halftime`;
+      this.emitCardResult(team, cardId, cardMeta?.type, false, "halftime");
       return false;
     }
     if (this.state.flow.goalResetMsRemaining > 0) {
@@ -643,6 +678,38 @@ export class MatchSim {
     }
   }
 
+  private estimateShotLaneRisk(team: TeamId, from: Vec2, to: Vec2): number {
+    const opp: TeamId = team === "HOME" ? "AWAY" : "HOME";
+    const shot = { x: to.x - from.x, y: to.y - from.y };
+    const shotLen = Math.max(1, Math.hypot(shot.x, shot.y));
+    const dir = { x: shot.x / shotLen, y: shot.y / shotLen };
+    const coneCos = Math.cos(Math.PI / 7.5);
+    let risk = 0;
+    for (const id of this.state.teams[opp].playerIds) {
+      const p = this.state.players[id];
+      const toOpp = { x: p.pos.x - from.x, y: p.pos.y - from.y };
+      const d = Math.hypot(toOpp.x, toOpp.y);
+      if (d > shotLen + 20) continue;
+      const n = d < 0.0001 ? { x: 0, y: 0 } : { x: toOpp.x / d, y: toOpp.y / d };
+      const alignment = n.x * dir.x + n.y * dir.y;
+      if (alignment < coneCos) continue;
+      const lane = this.segmentDistanceToShot(p.pos, from, to);
+      if (lane > 28) continue;
+      risk += (1 - lane / 28) * 0.45;
+    }
+    return Math.max(0, Math.min(1, risk));
+  }
+
+  private segmentDistanceToShot(point: Vec2, a: Vec2, b: Vec2): number {
+    const ab = { x: b.x - a.x, y: b.y - a.y };
+    const ap = { x: point.x - a.x, y: point.y - a.y };
+    const abLenSq = ab.x * ab.x + ab.y * ab.y;
+    if (abLenSq < 0.0001) return Math.hypot(point.x - a.x, point.y - a.y);
+    const t = Math.max(0, Math.min(1, (ap.x * ab.x + ap.y * ab.y) / abLenSq));
+    const proj = { x: a.x + ab.x * t, y: a.y + ab.y * t };
+    return Math.hypot(point.x - proj.x, point.y - proj.y);
+  }
+
   private recordDebugFrame(stepEvents: SimEvent[]) {
     this.tickCount += 1;
     this.debugFrames.push(compactStateFrame(this.state, this.tickCount, stepEvents));
@@ -795,7 +862,8 @@ export class MatchSim {
         : null) ?? this.pickTeammateByDirection(team, carrier.id, input.direction, 12, 360);
     const targetPos = targetedMate?.pos ?? this.resolveAimTarget(carrier.pos, team, input, 170);
 
-    const passChance = this.getActionSuccessChance(team, carrier.stats, "PASS");
+    const laneRisk = this.passSystem.estimateInterceptionRisk(this.state, team, carrier.pos, targetPos, "SHORT");
+    const passChance = Math.max(0.12, this.getActionSuccessChance(team, carrier.stats, "PASS") - laneRisk * 0.35);
     const passSuccess = this.rng.next() <= passChance;
     const resolvedTarget = passSuccess ? targetPos : this.jitterTarget(targetPos, 140);
 
@@ -822,7 +890,8 @@ export class MatchSim {
         : null) ?? this.pickTeammateByDirection(team, carrier.id, input.direction, 60, 760);
     const targetPos = targetedMate?.pos ?? this.resolveAimTarget(carrier.pos, team, input, 290);
 
-    const passChance = this.getActionSuccessChance(team, carrier.stats, "PASS") - 0.1;
+    const laneRisk = this.passSystem.estimateInterceptionRisk(this.state, team, carrier.pos, targetPos, "THROUGH");
+    const passChance = Math.max(0.08, this.getActionSuccessChance(team, carrier.stats, "PASS") - 0.1 - laneRisk * 0.42);
     const passSuccess = this.rng.next() <= passChance;
     const resolvedTarget = passSuccess ? targetPos : this.jitterTarget(targetPos, 190);
 
@@ -851,7 +920,8 @@ export class MatchSim {
       : { x: boxCenterX, y: this.resolveAimTarget(carrier.pos, team, input, 220).y };
     const target = targetedMate ? { x: targetedMate.pos.x, y: targetedMate.pos.y } : fallback;
 
-    const passChance = this.getActionSuccessChance(team, carrier.stats, "PASS") - 0.06;
+    const laneRisk = this.passSystem.estimateInterceptionRisk(this.state, team, carrier.pos, target, "LONG");
+    const passChance = Math.max(0.1, this.getActionSuccessChance(team, carrier.stats, "PASS") - 0.06 - laneRisk * 0.34);
     const passSuccess = this.rng.next() <= passChance;
     const resolvedTarget = passSuccess ? target : this.jitterTarget(target, 170);
 
@@ -916,7 +986,8 @@ export class MatchSim {
     const dist = Math.hypot(goal.x - carrier.pos.x, goal.y - carrier.pos.y);
     const inGoodLane = this.isInOppPenaltyArea(carrier.pos, team) || dist < 250;
     if (aimedShot || inGoodLane) {
-      const shotChance = this.getActionSuccessChance(team, carrier.stats, "SHOT");
+      const shotLaneRisk = this.estimateShotLaneRisk(team, carrier.pos, goal);
+      const shotChance = Math.max(0.08, this.getActionSuccessChance(team, carrier.stats, "SHOT") - shotLaneRisk * 0.4);
       const shotOnTarget = this.rng.next() <= shotChance;
       const shotTarget = shotOnTarget ? goal : this.jitterTarget(goal, 160);
       carrier.intent = {
@@ -952,6 +1023,15 @@ export class MatchSim {
     });
     const result = this.tackleSystem.tryCardTackle(this.state, team, this.ballSystem, mode, preferredTarget?.id);
     this.lastActionMessage = result === "MISS" ? "Tackle: closing down" : `Tackle ${result.toLowerCase()}`;
+    if (result === "FOUL") {
+      this.emit({
+        type: "ball_transition",
+        atMs: this.state.timeMs,
+        from: "CARRIED",
+        to: "CARRIED",
+        reason: "free_kick",
+      });
+    }
     const deltaByResult: Record<typeof result, number> = {
       WIN: 0.022,
       LOOSE: 0.008,
@@ -1067,6 +1147,33 @@ export class MatchSim {
         p.intent = null;
       }
     }
+  }
+
+  private clearAllIntents() {
+    for (const p of Object.values(this.state.players)) {
+      p.intent = null;
+    }
+  }
+
+  private recoverStaminaAtHalf() {
+    for (const p of Object.values(this.state.players)) {
+      p.stamina = Math.min(100, p.stamina + 26);
+    }
+  }
+
+  private forceKickoff(team: TeamId) {
+    const ids = this.state.teams[team].playerIds;
+    const carrierId = ids.find((id) => this.state.players[id].role !== "GK") ?? ids[0];
+    const carrier = this.state.players[carrierId];
+    this.state.ball.state = "KICKOFF";
+    this.state.ball.carrierId = carrierId;
+    this.state.ball.pos = { x: carrier.pos.x, y: carrier.pos.y };
+    this.state.ball.vel = { x: 0, y: 0 };
+    this.state.ball.targetPos = null;
+    this.state.ball.lastTouchTeam = team;
+    this.state.ball.carrierProtectedUntilMs = this.state.timeMs + 600;
+    this.state.possession.team = team;
+    this.state.possession.lastTouchTeam = team;
   }
 
   private static applyHomeSquad(state: MatchState, squad: SquadPlayerConfig[]) {

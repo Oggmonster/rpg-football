@@ -1,6 +1,6 @@
-﻿import { describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { DECK_SIZE } from "../../../src/sim/config/MatchConfig";
-import { PITCH_CENTER_Y, PITCH_RIGHT } from "../../../src/sim/config/PitchConfig";
+import { PITCH_CENTER_Y, PITCH_LEFT, PITCH_RIGHT, PITCH_TOP } from "../../../src/sim/config/PitchConfig";
 import { createInitialMatchState } from "../../../src/sim/state/createInitialMatchState";
 import type { MatchState } from "../../../src/sim/state/MatchState";
 import { BallSystem } from "../../../src/sim/systems/BallSystem";
@@ -34,7 +34,7 @@ describe("BallSystem transitions", () => {
 
     system.step(state, 16);
     for (const p of Object.values(state.players)) {
-      p.pos = { x: 0, y: 0 };
+      p.pos = { x: PITCH_LEFT + 20, y: PITCH_TOP + 20 };
     }
 
     const passOk = system.passTo(state, { x: 780, y: 270 });
@@ -59,8 +59,13 @@ describe("BallSystem transitions", () => {
     const system = new BallSystem(55);
 
     system.step(state, 16);
-    for (const p of Object.values(state.players)) {
-      p.pos = { x: 0, y: 0 };
+
+    const homeCarrierId = state.ball.carrierId!;
+    state.players[homeCarrierId].pos = { x: PITCH_LEFT + 220, y: PITCH_CENTER_Y };
+    state.ball.pos = { x: PITCH_LEFT + 224, y: PITCH_CENTER_Y };
+
+    for (const id of state.teams.AWAY.playerIds) {
+      state.players[id].pos = { x: PITCH_LEFT + 40, y: PITCH_TOP + 30 };
     }
 
     const shotOk = system.shootTo(state, { x: PITCH_RIGHT + 200, y: PITCH_CENTER_Y });
@@ -145,5 +150,41 @@ describe("BallSystem transitions", () => {
     expect(transitions.some((t) => t.reason === "goal_kick")).toBe(true);
     expect(state.ball.state).toBe("CARRIED");
     expect(state.possession.team).toBe("AWAY");
+  });
+
+  test("in-flight ball can be intercepted in lane by defender", () => {
+    const state = makeState(101);
+    const system = new BallSystem(101);
+    system.step(state, 16);
+
+    const passerId = state.teams.HOME.playerIds.find((id) => state.players[id].role !== "GK")!;
+    const passer = state.players[passerId];
+    passer.pos = { x: 420, y: 270 };
+    state.ball.state = "CARRIED";
+    state.ball.carrierId = passerId;
+    state.ball.pos = { x: 424, y: 270 };
+    state.ball.lastTouchTeam = "HOME";
+
+    const defenderId = state.teams.AWAY.playerIds.find((id) => state.players[id].role !== "GK")!;
+    const defender = state.players[defenderId];
+    defender.pos = { x: 520, y: 270 };
+    defender.stats.def = 99;
+    defender.stats.pac = 99;
+
+    const passOk = system.passTo(state, { x: 680, y: 270 });
+    expect(passOk).toBe(true);
+
+    let intercepted = false;
+    for (let i = 0; i < 20; i++) {
+      const t = system.step(state, 16);
+      if (t.some((x) => x.reason === "lane_intercept")) {
+        intercepted = true;
+        break;
+      }
+    }
+
+    expect(intercepted).toBe(true);
+    expect(state.ball.state).toBe("CARRIED");
+    expect(state.ball.carrierId).toBe(defenderId);
   });
 });

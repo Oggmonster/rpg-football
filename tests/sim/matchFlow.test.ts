@@ -67,4 +67,24 @@ describe("Match flow", () => {
     expect(state.teams.HOME.handAttack.cards.length).toBe(HAND_SIZE);
     expect(state.teams.HOME.handDefense.cards.length).toBe(HAND_SIZE);
   });
+
+  test("enters halftime once and resumes live play", () => {
+    const sim = MatchSim.createFromCatalogs({
+      attackCatalog,
+      defenseCatalog,
+      rngSeed: 504,
+    });
+
+    sim.step(120000);
+    let state = JSON.parse(sim.getStateSnapshot());
+    expect(state.phase).toBe("HALFTIME");
+    expect(state.flow.halftimeTaken).toBe(true);
+    expect(state.flow.halftimeMsRemaining).toBeGreaterThan(0);
+
+    sim.step(2500);
+    state = JSON.parse(sim.getStateSnapshot());
+    expect(state.phase).toBe("LIVE");
+    expect(state.ball.state).toBe("KICKOFF");
+    expect(state.possession.team).toBe("AWAY");
+  });
 });
