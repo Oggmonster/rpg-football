@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "assets:pixellab": "node scripts/generate-pixellab-assets.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

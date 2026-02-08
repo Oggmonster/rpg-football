@@ -15,6 +15,7 @@ export class PlayerView {
   readonly id: string;
   private scene: Phaser.Scene;
   private sprite: Phaser.GameObjects.Sprite;
+  private baseScale = 1;
   private shadow: Phaser.GameObjects.Ellipse;
   private focusRing: Phaser.GameObjects.Ellipse;
   private label: Phaser.GameObjects.Text;
@@ -30,6 +31,7 @@ export class PlayerView {
     this.focusRing = scene.add.ellipse(player.pos.x, player.pos.y, 22, 22, 0xffffff, 0).setStrokeStyle(1, 0x93ffe1, 0.85).setVisible(false);
     this.sprite = scene.add.sprite(player.pos.x, player.pos.y, this.textureKey(player, "idle"));
     this.sprite.setOrigin(0.5, 0.5);
+    this.syncBaseScale();
 
     this.label = scene.add
       .text(player.pos.x, player.pos.y - 12, `${player.shirtNumber}`, {
@@ -133,27 +135,35 @@ export class PlayerView {
         : `${prefix}_${animState}`;
     if (this.sprite.texture.key !== key) {
       this.sprite.setTexture(key);
+      this.syncBaseScale();
     }
   }
 
   private applyBodyMotion(speed: number, alpha: number, isKicker: boolean, isDefender: boolean) {
     if (speed > 8) {
       const pulse = 1 + Math.sin((this.scene.time.now + alpha * 14) * 0.02) * 0.05;
-      this.sprite.setScale(pulse, 1 / pulse);
+      this.sprite.setScale(this.baseScale * pulse, this.baseScale * (1 / pulse));
       return;
     }
 
     if (isKicker) {
-      this.sprite.setScale(1.09, 0.92);
+      this.sprite.setScale(this.baseScale * 1.09, this.baseScale * 0.92);
       return;
     }
 
     if (isDefender) {
-      this.sprite.setScale(0.94, 1.08);
+      this.sprite.setScale(this.baseScale * 0.94, this.baseScale * 1.08);
       return;
     }
 
-    this.sprite.setScale(1, 1);
+    this.sprite.setScale(this.baseScale, this.baseScale);
+  }
+
+  private syncBaseScale() {
+    const source = this.sprite.texture.getSourceImage() as { width?: number; height?: number } | undefined;
+    const sourceHeight = source?.height ?? this.sprite.height ?? 16;
+    this.baseScale = Phaser.Math.Clamp(18 / Math.max(1, sourceHeight), 0.2, 2);
+    this.sprite.setScale(this.baseScale, this.baseScale);
   }
 
   private spawnActionPulse(x: number, y: number, color: number) {

@@ -1,0 +1,269 @@
+{
+  "api_base_url": "https://api.pixellab.ai/v2",
+  "style_prefix": "16-bit inspired tactical football pixel art, playful but not childish, minimalist readable silhouettes, retro-modern look, muted palette, clear dark outlines, no text, no logos, no watermark",
+  "defaults": {
+    "image_size": {
+      "width": 64,
+      "height": 64
+    },
+    "no_background": true,
+    "seed": null
+  },
+  "assets": [
+    {
+      "id": "pitch_main",
+      "kind": "image",
+      "description": "top-down football pitch, center circle, halfway line, penalty boxes, white field lines, subtle stripe mowing pattern, clean readable tactical layout, no players",
+      "image_size": {
+        "width": 64,
+        "height": 64
+      },
+      "no_background": false,
+      "keep_variants": 4
+    },
+    {
+      "id": "goal_left",
+      "kind": "image",
+      "description": "left-side football goal with visible net, simple metal frame, top-down tactical camera, transparent background",
+      "image_size": {
+        "width": 64,
+        "height": 64
+      },
+      "keep_variants": 4
+    },
+    {
+      "id": "goal_right",
+      "kind": "image",
+      "description": "right-side football goal with visible net, simple metal frame, top-down tactical camera, transparent background",
+      "image_size": {
+        "width": 64,
+        "height": 64
+      },
+      "keep_variants": 4
+    },
+    {
+      "id": "player_home_idle",
+      "kind": "image",
+      "description": "top-down football player idle, home kit royal blue shirt, darker blue shorts, light trim, tiny tactical sprite",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_home_run_a",
+      "kind": "image",
+      "description": "top-down football player running frame A without ball, home kit royal blue, strong leg silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_home_run_b",
+      "kind": "image",
+      "description": "top-down football player running frame B without ball, home kit royal blue, opposite leg silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_home_kick",
+      "kind": "image",
+      "description": "top-down football player kicking pose, home kit royal blue, strong follow-through silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_home_tackle",
+      "kind": "image",
+      "description": "top-down football player tackle pose, home kit royal blue, aggressive defensive silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_away_idle",
+      "kind": "image",
+      "description": "top-down football player idle, away kit warm yellow shirt, darker yellow shorts, tiny tactical sprite",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_away_run_a",
+      "kind": "image",
+      "description": "top-down football player running frame A without ball, away kit warm yellow, strong leg silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_away_run_b",
+      "kind": "image",
+      "description": "top-down football player running frame B without ball, away kit warm yellow, opposite leg silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_away_kick",
+      "kind": "image",
+      "description": "top-down football player kicking pose, away kit warm yellow, strong follow-through silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_away_tackle",
+      "kind": "image",
+      "description": "top-down football player tackle pose, away kit warm yellow, aggressive defensive silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_home_idle",
+      "kind": "image",
+      "description": "top-down goalkeeper idle, deep blue goalkeeper kit, gloves visible, tactical sprite",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_home_run_a",
+      "kind": "image",
+      "description": "top-down goalkeeper movement frame A, deep blue goalkeeper kit, ready stance",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_home_run_b",
+      "kind": "image",
+      "description": "top-down goalkeeper movement frame B, deep blue goalkeeper kit, ready stance",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_home_kick",
+      "kind": "image",
+      "description": "top-down goalkeeper long kick pose, deep blue goalkeeper kit",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_home_tackle",
+      "kind": "image",
+      "description": "top-down goalkeeper block tackle pose, deep blue goalkeeper kit",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_home_save",
+      "kind": "image",
+      "description": "top-down goalkeeper save pose, deep blue goalkeeper kit, diving or spread silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_away_idle",
+      "kind": "image",
+      "description": "top-down goalkeeper idle, amber goalkeeper kit, gloves visible, tactical sprite",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_away_run_a",
+      "kind": "image",
+      "description": "top-down goalkeeper movement frame A, amber goalkeeper kit, ready stance",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_away_run_b",
+      "kind": "image",
+      "description": "top-down goalkeeper movement frame B, amber goalkeeper kit, ready stance",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_away_kick",
+      "kind": "image",
+      "description": "top-down goalkeeper long kick pose, amber goalkeeper kit",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_away_tackle",
+      "kind": "image",
+      "description": "top-down goalkeeper block tackle pose, amber goalkeeper kit",
+      "keep_variants": 4
+    },
+    {
+      "id": "player_gk_away_save",
+      "kind": "image",
+      "description": "top-down goalkeeper save pose, amber goalkeeper kit, diving or spread silhouette",
+      "keep_variants": 4
+    },
+    {
+      "id": "ball_idle",
+      "kind": "image",
+      "description": "tiny top-down football resting on ground, classic black and white patch pattern",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "keep_variants": 4
+    },
+    {
+      "id": "ball_flight",
+      "kind": "image",
+      "description": "tiny top-down football in-air frame with motion clarity, bright highlight and light trail cue",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "keep_variants": 4
+    },
+    {
+      "id": "ball_shot",
+      "kind": "image",
+      "description": "tiny top-down football power-shot frame with energetic streak and warm impact tint",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "keep_variants": 4
+    },
+    {
+      "id": "home_run_with_ball_cycle",
+      "kind": "animation",
+      "reference_asset_id": "player_home_idle",
+      "action": "running while dribbling the football",
+      "frame_targets": [
+        {
+          "id": "player_home_dribble_a",
+          "index": 0
+        },
+        {
+          "id": "player_home_dribble_b",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "id": "away_run_with_ball_cycle",
+      "kind": "animation",
+      "reference_asset_id": "player_away_idle",
+      "action": "running while dribbling the football",
+      "frame_targets": [
+        {
+          "id": "player_away_dribble_a",
+          "index": 0
+        },
+        {
+          "id": "player_away_dribble_b",
+          "index": 1
+        }
+      ]
+    },
+    {
+      "id": "ball_air_cycle",
+      "kind": "animation",
+      "reference_asset_id": "ball_idle",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "action": "football flying through the air with spin"
+    },
+    {
+      "id": "ball_bounce_cycle",
+      "kind": "animation",
+      "reference_asset_id": "ball_idle",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "action": "football bouncing once on grass"
+    },
+    {
+      "id": "ball_roll_cycle",
+      "kind": "animation",
+      "reference_asset_id": "ball_idle",
+      "image_size": {
+        "width": 32,
+        "height": 32
+      },
+      "action": "football rolling on ground with visible spin"
+    }
+  ]
+}

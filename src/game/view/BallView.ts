@@ -4,6 +4,7 @@ import type { BallState } from "../../sim/state/MatchState";
 export class BallView {
   private scene: Phaser.Scene;
   private ball: Phaser.GameObjects.Sprite;
+  private baseScale = 0.5;
   private ring: Phaser.GameObjects.Ellipse;
   private lastState: BallState["state"];
   private lastTrailAtMs = 0;
@@ -12,7 +13,7 @@ export class BallView {
     this.scene = scene;
     this.ring = scene.add.ellipse(x, y, 12, 12, 0xffffff, 0).setStrokeStyle(1, 0xffffff, 0.25);
     this.ball = scene.add.sprite(x, y, "ball_idle");
-    this.ball.setScale(0.5, 0.5);
+    this.syncBaseScale();
     this.lastState = "KICKOFF";
   }
 
@@ -48,27 +49,42 @@ export class BallView {
   private applyStateStyle(state: BallState["state"], speed: number) {
     switch (state) {
       case "SHOT":
-        this.ball.setTexture("ball_shot");
+        this.setBallTexture("ball_shot");
         this.ring.setVisible(true).setScale(1.45).setStrokeStyle(1, 0xff7f4d, 0.6);
         this.ball.setRotation(Math.min(0.9, speed / 700));
         break;
       case "IN_FLIGHT":
-        this.ball.setTexture("ball_flight");
+        this.setBallTexture("ball_flight");
         this.ring.setVisible(true).setScale(1.25).setStrokeStyle(1, 0x87ffd7, 0.45);
         this.ball.setRotation(Math.min(0.6, speed / 900));
         break;
       case "LOOSE":
       case "CONTROL_CONTEST":
-        this.ball.setTexture("ball_idle");
+        this.setBallTexture("ball_idle");
         this.ring.setVisible(true).setScale(1.35).setStrokeStyle(1, 0xffcc66, 0.5);
         this.ball.setRotation(0);
         break;
       default:
-        this.ball.setTexture("ball_idle");
+        this.setBallTexture("ball_idle");
         this.ring.setVisible(false);
         this.ball.setRotation(0);
         break;
     }
+  }
+
+  private setBallTexture(textureKey: string) {
+    if (this.ball.texture.key === textureKey) {
+      return;
+    }
+    this.ball.setTexture(textureKey);
+    this.syncBaseScale();
+  }
+
+  private syncBaseScale() {
+    const source = this.ball.texture.getSourceImage() as { width?: number; height?: number } | undefined;
+    const sourceSize = Math.max(source?.width ?? 16, source?.height ?? 16, 1);
+    this.baseScale = Phaser.Math.Clamp(8 / sourceSize, 0.08, 1.5);
+    this.ball.setScale(this.baseScale, this.baseScale);
   }
 
   private spawnTrailDot(x: number, y: number, color: number) {

@@ -3,6 +3,9 @@ import attackCards from "../../data/cards.attack.json";
 import defenseCards from "../../data/cards.defense.json";
 import { HAND_SIZE } from "../../sim/config/MatchConfig";
 import {
+  GOAL_LINE_LEFT_X,
+  GOAL_LINE_RIGHT_X,
+  PITCH_CENTER_Y,
   PENALTY_BOX_DEPTH,
   PENALTY_BOX_HEIGHT,
   PITCH_HEIGHT,
@@ -935,43 +938,83 @@ export class MatchScene extends Phaser.Scene {
     const pitchY = PITCH_TOP;
     const pitchW = PITCH_WIDTH;
     const pitchH = PITCH_HEIGHT;
+    const stripeCount = 12;
+    const stripeW = pitchW / stripeCount;
+    const boxDepth = PENALTY_BOX_DEPTH;
+    const boxHeight = PENALTY_BOX_HEIGHT;
+    const boxY = PITCH_CENTER_Y - boxHeight / 2;
+    const sixYardDepth = Math.max(90, Math.round(boxDepth * 0.38));
+    const sixYardHeight = Math.max(130, Math.round(boxHeight * 0.42));
+    const sixYardY = PITCH_CENTER_Y - sixYardHeight / 2;
+    const penaltySpotOffset = Math.round(boxDepth * 0.56);
+    const goalHeight = 140;
+    const goalDepth = 16;
+    const goalY = PITCH_CENTER_Y - goalHeight / 2;
 
-    g.fillStyle(0x1b6b3b, 1);
+    g.fillStyle(0x195e35, 1);
     g.fillRect(pitchX, pitchY, pitchW, pitchH);
-
-    for (let i = 0; i < 10; i++) {
-      g.fillStyle(i % 2 === 0 ? 0x1f7a41 : 0x1b6b3b, 1);
-      const stripeW = pitchW / 10;
+    for (let i = 0; i < stripeCount; i++) {
+      g.fillStyle(i % 2 === 0 ? 0x216b3d : 0x1b6338, 1);
       g.fillRect(pitchX + i * stripeW, pitchY, stripeW, pitchH);
     }
 
-    g.lineStyle(2, 0xffffff, 1);
-    g.strokeRect(pitchX, pitchY, pitchW, pitchH);
+    // Subtle edge shading to add depth while keeping pixel-style clarity.
+    g.fillStyle(0x103722, 0.2);
+    g.fillRect(pitchX, pitchY, pitchW, 30);
+    g.fillRect(pitchX, pitchY + pitchH - 30, pitchW, 30);
 
+    g.lineStyle(3, 0xf2fff7, 0.96);
+    g.strokeRect(pitchX, pitchY, pitchW, pitchH);
+    g.lineStyle(2, 0xf2fff7, 0.94);
     g.beginPath();
     g.moveTo(pitchX + pitchW / 2, pitchY);
     g.lineTo(pitchX + pitchW / 2, pitchY + pitchH);
     g.strokePath();
-
     g.strokeCircle(pitchX + pitchW / 2, pitchY + pitchH / 2, 92);
+    g.fillStyle(0xf2fff7, 0.96);
+    g.fillCircle(pitchX + pitchW / 2, pitchY + pitchH / 2, 3);
 
-    g.strokeRect(pitchX - 8, pitchY + pitchH / 2 - 70, 8, 140);
-    g.strokeRect(pitchX + pitchW, pitchY + pitchH / 2 - 70, 8, 140);
-
-    const boxDepth = PENALTY_BOX_DEPTH;
-    const boxHeight = PENALTY_BOX_HEIGHT;
-    const boxY = pitchY + pitchH / 2 - boxHeight / 2;
     g.strokeRect(pitchX, boxY, boxDepth, boxHeight);
     g.strokeRect(pitchX + pitchW - boxDepth, boxY, boxDepth, boxHeight);
+    g.strokeRect(pitchX, sixYardY, sixYardDepth, sixYardHeight);
+    g.strokeRect(pitchX + pitchW - sixYardDepth, sixYardY, sixYardDepth, sixYardHeight);
 
-    this.add
-      .text(pitchX + 8, pitchY + 8, "Pitch (placeholder)", {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#eafff6",
-      })
-      .setAlpha(0.7)
-      .setDepth(1);
+    g.fillCircle(pitchX + penaltySpotOffset, PITCH_CENTER_Y, 3);
+    g.fillCircle(pitchX + pitchW - penaltySpotOffset, PITCH_CENTER_Y, 3);
+
+    g.lineStyle(2, 0xdff7ff, 0.7);
+    g.beginPath();
+    g.moveTo(GOAL_LINE_LEFT_X, boxY);
+    g.lineTo(GOAL_LINE_LEFT_X, boxY + boxHeight);
+    g.moveTo(GOAL_LINE_RIGHT_X, boxY);
+    g.lineTo(GOAL_LINE_RIGHT_X, boxY + boxHeight);
+    g.strokePath();
+
+    // Draw simple built-in goals with net lines.
+    g.lineStyle(2, 0xf2fff7, 0.95);
+    g.fillStyle(0xe0f4ff, 0.12);
+    g.fillRect(pitchX - goalDepth, goalY, goalDepth, goalHeight);
+    g.strokeRect(pitchX - goalDepth, goalY, goalDepth, goalHeight);
+    g.fillRect(pitchX + pitchW, goalY, goalDepth, goalHeight);
+    g.strokeRect(pitchX + pitchW, goalY, goalDepth, goalHeight);
+
+    g.lineStyle(1, 0xbad6e4, 0.6);
+    for (let y = goalY + 8; y < goalY + goalHeight; y += 8) {
+      g.beginPath();
+      g.moveTo(pitchX - goalDepth, y);
+      g.lineTo(pitchX, y);
+      g.moveTo(pitchX + pitchW, y);
+      g.lineTo(pitchX + pitchW + goalDepth, y);
+      g.strokePath();
+    }
+    for (let x = 4; x < goalDepth; x += 4) {
+      g.beginPath();
+      g.moveTo(pitchX - goalDepth + x, goalY);
+      g.lineTo(pitchX - goalDepth + x, goalY + goalHeight);
+      g.moveTo(pitchX + pitchW + x, goalY);
+      g.lineTo(pitchX + pitchW + x, goalY + goalHeight);
+      g.strokePath();
+    }
   }
 
   private pinUiToCamera() {

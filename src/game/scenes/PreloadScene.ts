@@ -8,19 +8,58 @@ type PixelTextureDef = {
   pixelWidth?: number;
 };
 
+const PIXELLAB_TEXTURE_KEYS = [
+  "pitch_main",
+  "goal_left",
+  "goal_right",
+  "player_home_idle",
+  "player_home_run_a",
+  "player_home_run_b",
+  "player_home_kick",
+  "player_home_tackle",
+  "player_away_idle",
+  "player_away_run_a",
+  "player_away_run_b",
+  "player_away_kick",
+  "player_away_tackle",
+  "player_gk_home_idle",
+  "player_gk_home_run_a",
+  "player_gk_home_run_b",
+  "player_gk_home_kick",
+  "player_gk_home_tackle",
+  "player_gk_home_save",
+  "player_gk_away_idle",
+  "player_gk_away_run_a",
+  "player_gk_away_run_b",
+  "player_gk_away_kick",
+  "player_gk_away_tackle",
+  "player_gk_away_save",
+  "ball_idle",
+  "ball_flight",
+  "ball_shot",
+] as const;
+
 export class PreloadScene extends Phaser.Scene {
   constructor() {
     super("PreloadScene");
   }
 
   preload() {
-    this.generateRuntimeTextures();
+    this.queueExternalTextures();
   }
 
   create() {
+    // Fill any missing textures with procedural fallbacks.
+    this.generateRuntimeTextures();
     // Ensure profile exists on first boot.
     loadProfile();
     this.scene.start("MainMenuScene");
+  }
+
+  private queueExternalTextures() {
+    for (const key of PIXELLAB_TEXTURE_KEYS) {
+      this.load.image(key, `assets/pixellab/${key}.png`);
+    }
   }
 
   private generateRuntimeTextures() {
