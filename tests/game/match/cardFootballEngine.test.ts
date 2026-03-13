@@ -43,11 +43,14 @@ describe("CardFootballEngine", () => {
   test("starts with a home kickoff, three cards, and 11 players per side when requested", () => {
     const engine = new CardFootballEngine({ rngSeed: 7, kickoffTeamFirstHalf: "HOME" });
     const state = engine.getState();
+    const homeNames = new Set(state.pitchPlayers.filter((player) => player.teamId === "HOME").map((player) => player.name));
+    const awayNames = state.pitchPlayers.filter((player) => player.teamId === "AWAY").map((player) => player.name);
 
     expect(state.turnMode).toBe("PLAYER_ATTACK");
     expect(state.currentHand).toHaveLength(3);
     expect(state.pitchPlayers.filter((player) => player.teamId === "HOME")).toHaveLength(11);
     expect(state.pitchPlayers.filter((player) => player.teamId === "AWAY")).toHaveLength(11);
+    expect(awayNames.some((name) => homeNames.has(name))).toBe(false);
   });
 
   test("resolves turns and immediately prepares the next three-card hand", () => {
@@ -61,11 +64,46 @@ describe("CardFootballEngine", () => {
     expect(state.currentHand).toHaveLength(3);
   });
 
+  test("successful attacks build pressure for the attacking team", () => {
+    const engine = new CardFootballEngine({ rngSeed: 18, kickoffTeamFirstHalf: "HOME" }) as unknown as {
+      getState: CardFootballEngine["getState"];
+      playAttackCard: CardFootballEngine["playAttackCard"];
+      rng: { int: (min: number, max: number) => number };
+      state: { currentHand: string[] };
+    };
+
+    engine.state.currentHand = ["SHORT_PASS", "BODY_FEINT", "PLACED_SHOT"];
+    engine.rng.int = () => 1;
+    const target = engine.getState().pitchPlayers.find((player) => player.teamId === "HOME" && player.slotId === "ST");
+    expect(target).toBeDefined();
+
+    engine.playAttackCard("SHORT_PASS", {
+      type: "PASS",
+      targetPlayerId: target!.playerId,
+    });
+
+    const state = engine.getState();
+    expect(state.pressure.HOME).toBeGreaterThan(0);
+    expect(state.pressure.AWAY).toBe(0);
+  });
+
+  test("movement phase repositions multiple players during a resolution", () => {
+    const engine = new CardFootballEngine({ rngSeed: 12, kickoffTeamFirstHalf: "HOME" });
+
+    const result = playAnyTurn(engine);
+    const movedPlayers = result.animations.filter(
+      (animation) => Math.hypot(animation.toX - animation.fromX, animation.toY - animation.fromY) > 0.5
+    );
+
+    expect(result.animations).toHaveLength(22);
+    expect(movedPlayers.length).toBeGreaterThan(8);
+  });
+
   test("reaches halftime, accepts tactical changes and substitutions, then starts the second half", () => {
     const engine = new CardFootballEngine({ rngSeed: 11, kickoffTeamFirstHalf: "HOME" });
 
     let guard = 0;
-    while (engine.getState().phase === "LIVE" && guard < 80) {
+    while (engine.getState().phase === "LIVE" && guard < 160) {
       playAnyTurn(engine);
       guard += 1;
     }
@@ -85,5 +123,195 @@ describe("CardFootballEngine", () => {
     expect(secondHalf.phase).toBe("LIVE");
     expect(secondHalf.turnMode).toBe("PLAYER_DEFENSE");
     expect(secondHalf.teams[0].tactic).toBe("DIRECT");
+  });
+
+  test("starting a new attack after a turnover keeps the ball at the live pitch location", () => {
+    const engine = new CardFootballEngine({ rngSeed: 17, kickoffTeamFirstHalf: "HOME" }) as unknown as {
+      getState: CardFootballEngine["getState"];
+      startRound: (teamId: "HOME" | "AWAY", openingLine: string, resetToCenter: boolean) => void;
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        teams: {
+          AWAY: { lineup: { ST: { playerId: string; x: number; y: number; hasBall: boolean } } };
+          HOME: { lineup: { LW: { x: number; y: number } } };
+        };
+      };
+    };
+
+    engine.state.teams.HOME.lineup.LW.x = 34.7;
+    engine.state.teams.HOME.lineup.LW.y = 9.4;
+    engine.state.teams.AWAY.lineup.ST.x = 73.5;
+    engine.state.teams.AWAY.lineup.ST.y = 18.2;
+    engine.state.ball.teamId = "AWAY";
+    engine.state.ball.holderId = engine.state.teams.AWAY.lineup.ST.playerId;
+    engine.state.ball.x = 73.5;
+    engine.state.ball.y = 18.2;
+
+    engine.startRound("AWAY", "Turn over.", false);
+
+    const state = engine.getState();
+    expect(state.ball.x).toBeCloseTo(73.5, 5);
+    expect(state.ball.y).toBeCloseTo(18.2, 5);
+    expect(state.ball.holderId).toBe(engine.state.teams.AWAY.lineup.ST.playerId);
+    expect(engine.state.teams.HOME.lineup.LW.x).toBeCloseTo(34.7, 5);
+    expect(engine.state.teams.HOME.lineup.LW.y).toBeCloseTo(9.4, 5);
+    expect(engine.state.teams.AWAY.lineup.ST.hasBall).toBe(true);
+  });
+
+  test("failed passes recover near the loose-ball area instead of jumping to a fixed center-back", () => {
+    const engine = new CardFootballEngine({ rngSeed: 31, kickoffTeamFirstHalf: "HOME" }) as unknown as {
+      getState: CardFootballEngine["getState"];
+      playAttackCard: CardFootballEngine["playAttackCard"];
+      rng: { int: (min: number, max: number) => number };
+      state: { currentHand: string[] };
+    };
+
+    engine.state.currentHand = ["SHORT_PASS", "BODY_FEINT", "POWER_DRIVE"];
+    const targets = engine.getPassTargets("SHORT_PASS");
+    const widestTarget = targets.sort((a, b) => b.x - a.x)[0];
+
+    engine.rng.int = () => 100;
+
+    const result = engine.playAttackCard("SHORT_PASS", {
+      type: "PASS",
+      targetPlayerId: widestTarget.playerId,
+    });
+    const state = engine.getState();
+    const holder = state.pitchPlayers.find((player) => player.playerId === state.ball.holderId);
+
+    expect(result.title).toMatch(/Pass Misplayed|Intercepted/);
+    expect(holder).toBeDefined();
+    expect(holder?.teamId).toBe("AWAY");
+    expect(Math.abs((holder?.x ?? 0) - widestTarget.x)).toBeLessThan(20);
+  });
+
+  test("failed wide passes can create a throw-in restart instead of a magical turnover", () => {
+    const engine = new CardFootballEngine({ rngSeed: 35, kickoffTeamFirstHalf: "HOME" }) as unknown as {
+      getState: CardFootballEngine["getState"];
+      playAttackCard: CardFootballEngine["playAttackCard"];
+      rng: { int: (min: number, max: number) => number };
+      state: {
+        currentHand: string[];
+        teams: {
+          HOME: { lineup: { RW: { playerId: string; x: number; y: number } } };
+        };
+      };
+    };
+
+    engine.state.currentHand = ["SWITCH_PLAY", "BODY_FEINT", "PLACED_SHOT"];
+    engine.state.teams.HOME.lineup.RW.x = 71;
+    engine.state.teams.HOME.lineup.RW.y = 59;
+    engine.rng.int = () => 100;
+
+    const result = engine.playAttackCard("SWITCH_PLAY", {
+      type: "PASS",
+      targetPlayerId: engine.state.teams.HOME.lineup.RW.playerId,
+    });
+
+    expect(result.restart?.type).toBe("THROW_IN");
+  });
+
+  test("off-ball movement restores width and defensive shape instead of collapsing into one cluster", () => {
+    const engine = new CardFootballEngine({ rngSeed: 41, kickoffTeamFirstHalf: "HOME" }) as unknown as {
+      playAttackCard: CardFootballEngine["playAttackCard"];
+      getState: CardFootballEngine["getState"];
+      rng: { int: (min: number, max: number) => number };
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        currentHand: string[];
+        teams: {
+          HOME: {
+            lineup: Record<string, { playerId: string; x: number; y: number }>;
+          };
+          AWAY: {
+            lineup: Record<string, { x: number; y: number }>;
+          };
+        };
+      };
+    };
+
+    for (const slot of ["LB", "LCB", "RCB", "RB", "LCM", "CM", "RCM", "LW", "ST", "RW"]) {
+      engine.state.teams.HOME.lineup[slot].x = 48;
+      engine.state.teams.HOME.lineup[slot].y = 31;
+      engine.state.teams.AWAY.lineup[slot].x = 52;
+      engine.state.teams.AWAY.lineup[slot].y = 33;
+    }
+    engine.state.ball.teamId = "HOME";
+    engine.state.ball.holderId = engine.state.teams.HOME.lineup.CM.playerId;
+    engine.state.ball.x = 48;
+    engine.state.ball.y = 31;
+    engine.state.currentHand = ["SHORT_PASS", "BODY_FEINT", "POWER_DRIVE"];
+    engine.rng.int = () => 1;
+
+    engine.playAttackCard("SHORT_PASS", {
+      type: "PASS",
+      targetPlayerId: engine.state.teams.HOME.lineup.ST.playerId,
+    });
+
+    const state = engine.getState();
+    const homeWide = state.pitchPlayers
+      .filter((player) => player.teamId === "HOME" && ["LW", "RW"].includes(player.slotId))
+      .sort((a, b) => a.y - b.y);
+    const awayFullbacks = state.pitchPlayers
+      .filter((player) => player.teamId === "AWAY" && ["LB", "RB"].includes(player.slotId))
+      .sort((a, b) => a.y - b.y);
+
+    expect(homeWide[0].y).toBeLessThan(32);
+    expect(homeWide[1].y).toBeGreaterThan(32);
+    expect(awayFullbacks[0].y).toBeLessThan(33);
+    expect(awayFullbacks[1].y).toBeGreaterThan(33);
+  });
+
+  test("keeper retreats back toward goal after losing the ball", () => {
+    const engine = new CardFootballEngine({ rngSeed: 55, kickoffTeamFirstHalf: "HOME" }) as unknown as {
+      getState: CardFootballEngine["getState"];
+      playAttackCard: CardFootballEngine["playAttackCard"];
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        currentHand: string[];
+        teams: {
+          HOME: {
+            lineup: {
+              GK: { playerId: string; x: number; y: number };
+              ST: { playerId: string; x: number; y: number };
+            };
+          };
+          AWAY: {
+            lineup: {
+              GK: { x: number; y: number };
+            };
+          };
+        };
+      };
+    };
+
+    engine.state.teams.HOME.lineup.GK.x = 20;
+    engine.state.teams.HOME.lineup.GK.y = 39;
+    engine.state.teams.HOME.lineup.ST.x = 63;
+    engine.state.teams.HOME.lineup.ST.y = 32;
+    engine.state.ball.teamId = "HOME";
+    engine.state.ball.holderId = engine.state.teams.HOME.lineup.ST.playerId;
+    engine.state.ball.x = 63;
+    engine.state.ball.y = 32;
+    engine.state.currentHand = ["SHORT_PASS", "BODY_FEINT", "POWER_DRIVE"];
+
+    engine.playAttackCard("SHORT_PASS", {
+      type: "PASS",
+      targetPlayerId: engine.state.teams.HOME.lineup.ST.playerId,
+    });
+
+    const state = engine.getState();
+    const keeper = state.pitchPlayers.find((player) => player.teamId === "HOME" && player.slotId === "GK");
+
+    expect(keeper).toBeDefined();
+    expect((keeper?.x ?? 99)).toBeLessThan(20);
+  });
+
+  test("engine exposes distinct team playstyles for the prototype match", () => {
+    const engine = new CardFootballEngine({ rngSeed: 61, kickoffTeamFirstHalf: "HOME" });
+    const state = engine.getState();
+
+    expect(state.teams.find((team) => team.id === "HOME")?.playstyle).toBe("CONTROL");
+    expect(["CONTROL", "DIRECT", "WIDE", "PRESSING"]).toContain(state.teams.find((team) => team.id === "AWAY")?.playstyle);
   });
 });

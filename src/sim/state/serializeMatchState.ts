@@ -18,3 +18,4 @@ export function serializeMatchState(state: MatchState): string {
 
   return JSON.stringify(payload);
 }
+ 

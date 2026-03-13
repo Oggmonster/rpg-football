@@ -9,6 +9,8 @@ export type AttackCardKind = "PASS" | "DRIBBLE" | "SHOT";
 export type DefenseCardKind = "BLOCK" | "TACKLE" | "MAN_MARK";
 export type CardFamily = "ATTACK" | "DEFENSE";
 export type MatchTacticId = "BALANCED" | "DIRECT" | "WING_PLAY" | "LOW_BLOCK";
+export type MatchPlaystyleId = "CONTROL" | "DIRECT" | "WIDE" | "PRESSING";
+export type MatchRestartType = "CORNER" | "THROW_IN" | "GOAL_KICK" | "REBOUND";
 export type DistanceTier = "LONG" | "MID" | "CLOSE";
 export type SlotId =
   | "GK"
@@ -97,6 +99,7 @@ type TeamRosterState = {
   lineup: Record<SlotId, TeamRosterPlayer>;
   bench: TeamRosterPlayer[];
   tactic: MatchTacticId;
+  playstyle: MatchPlaystyleId;
   substitutionsUsed: number;
   decks: TeamDeckState;
 };
@@ -125,6 +128,14 @@ type BallState = {
   y: number;
 };
 
+type RestartState = {
+  type: MatchRestartType;
+  teamId: TeamId;
+  label: string;
+  x: number;
+  y: number;
+};
+
 type MatchState = {
   seed: number;
   phase: MatchPhase;
@@ -134,6 +145,8 @@ type MatchState = {
   attackRoundsThisHalf: Record<TeamId, number>;
   score: Record<TeamId, number>;
   ball: BallState;
+  pressure: Record<TeamId, number>;
+  restart: RestartState | null;
   teams: Record<TeamId, TeamRosterState>;
   stats: Record<TeamId, MatchStats>;
   turnMode: TurnMode;
@@ -218,12 +231,15 @@ export type MatchStateView = {
     id: TeamId;
     label: string;
     tactic: MatchTacticId;
+    playstyle: MatchPlaystyleId;
     substitutionsUsed: number;
     lineup: LineupPlayerView[];
     bench: LineupPlayerView[];
   }[];
   pitchPlayers: PitchPlayerView[];
   ball: BallState;
+  pressure: Record<TeamId, number>;
+  restart: RestartState | null;
   commentaryFeed: string[];
   winner: TeamId | "DRAW" | null;
   stats: Record<TeamId, MatchStats>;
@@ -245,6 +261,7 @@ export type ActionResolutionView = {
   defendingCard: MatchCardView | null;
   cpuPreviewCard: MatchCardView | null;
   ball: BallState;
+  restart: RestartState | null;
   animations: {
     playerId: string;
     fromX: number;
@@ -269,14 +286,28 @@ export type CardFootballEngineOptions = {
   kickoffTeamFirstHalf?: TeamId;
 };
 
+type MovementPlan = {
+  positions: Map<string, { x: number; y: number }>;
+};
+
+type PressureCandidate = {
+  player: TeamRosterPlayer;
+  proximity: number;
+};
+
 const ATTACK_HAND_SIZE = 3;
 const DEFENSE_HAND_SIZE = 3;
-const ATTACK_ROUNDS_PER_HALF = 5;
+const ATTACK_ROUNDS_PER_HALF = 10;
 const MAX_SUBSTITUTIONS = 3;
 const PITCH_LENGTH = 100;
 const PITCH_HEIGHT = 64;
 const HOME_LABEL = "Blackflag City";
 const AWAY_LABEL = "CPU Athletic";
+const PASS_PRESSURE_RADIUS = 2.6;
+const DRIBBLE_PRESSURE_RADIUS = 3;
+const PASS_PRESSURE_WEIGHT = 0.68;
+const DRIBBLE_PRESSURE_WEIGHT = 24;
+const PLAYSTYLE_LIST: MatchPlaystyleId[] = ["CONTROL", "DIRECT", "WIDE", "PRESSING"];
 
 const SLOT_ORDER: SlotId[] = ["GK", "LB", "LCB", "RCB", "RB", "LCM", "CM", "RCM", "LW", "ST", "RW"];
 
@@ -362,6 +393,58 @@ const ATTACK_CARDS: AttackCardDef[] = [
     preferredMaxDistance: 16,
     accuracy: 7,
     flair: 3,
+    radius: 0,
+    requiredStars: 0,
+    shootingBoost: 1,
+  },
+  {
+    id: "THROUGH_BALL",
+    name: "Through Ball",
+    kind: "PASS",
+    description: "Slip it behind the line for a runner.",
+    preferredMinDistance: 14,
+    preferredMaxDistance: 32,
+    accuracy: 6,
+    flair: 6,
+    radius: 0,
+    requiredStars: 0,
+    shootingBoost: 1,
+  },
+  {
+    id: "CROSS",
+    name: "Cross",
+    kind: "PASS",
+    description: "Whip a ball into the danger area.",
+    preferredMinDistance: 16,
+    preferredMaxDistance: 30,
+    accuracy: 5,
+    flair: 5,
+    radius: 0,
+    requiredStars: 0,
+    shootingBoost: 2,
+  },
+  {
+    id: "HOLD_UP_PLAY",
+    name: "Hold-Up Play",
+    kind: "PASS",
+    description: "Set it back and bring runners into the move.",
+    preferredMinDistance: 4,
+    preferredMaxDistance: 14,
+    accuracy: 8,
+    flair: 2,
+    radius: 0,
+    requiredStars: 0,
+    shootingBoost: 2,
+  },
+  {
+    id: "OVERLAP_RUN",
+    name: "Overlap Run",
+    kind: "PASS",
+    description: "Release a runner around the outside.",
+    preferredMinDistance: 10,
+    preferredMaxDistance: 24,
+    accuracy: 7,
+    flair: 4,
     radius: 0,
     requiredStars: 0,
     shootingBoost: 1,
@@ -457,6 +540,11 @@ const DEFENSE_CARDS: DefenseCardDef[] = [
   { id: "CUT_OFF_RUN", name: "Cut Off Run", kind: "MAN_MARK", description: "Track the run before the ball arrives.", passStop: 5, dribbleStop: 3, shotStop: 2, longBallStop: 8 },
   { id: "PRESS_TRAP", name: "Press Trap", kind: "MAN_MARK", description: "Invite the pass and spring the trap.", passStop: 6, dribbleStop: 5, shotStop: 2, longBallStop: 5 },
   { id: "SWEEP_COVER", name: "Sweep Cover", kind: "MAN_MARK", description: "Drop and guard the danger space.", passStop: 3, dribbleStop: 4, shotStop: 5, longBallStop: 6 },
+  { id: "FORCE_WIDE", name: "Force Wide", kind: "MAN_MARK", description: "Show the attack toward the touchline.", passStop: 5, dribbleStop: 3, shotStop: 2, longBallStop: 6 },
+  { id: "PROTECT_MIDDLE", name: "Protect Middle", kind: "BLOCK", description: "Seal the inside lane and crowd the box.", passStop: 4, dribbleStop: 2, shotStop: 7, longBallStop: 4 },
+  { id: "DOUBLE_PRESS", name: "Double Press", kind: "TACKLE", description: "Jump the ball with two defenders.", passStop: 3, dribbleStop: 8, shotStop: 3, longBallStop: 2 },
+  { id: "DROP_OFF", name: "Drop Off", kind: "MAN_MARK", description: "Retreat into shape and deny the direct ball.", passStop: 3, dribbleStop: 3, shotStop: 5, longBallStop: 8 },
+  { id: "TRACK_RUNNER", name: "Track Runner", kind: "MAN_MARK", description: "Shadow the runner instead of diving to the ball.", passStop: 6, dribbleStop: 2, shotStop: 3, longBallStop: 8 },
 ];
 
 const ATTACK_LOOKUP = new Map(ATTACK_CARDS.map((card) => [card.id, card]));
@@ -466,6 +554,28 @@ const ATTACK_DECK_TEMPLATE = ATTACK_CARDS.flatMap((card) => [card.id, card.id, c
 const DEFENSE_DECK_TEMPLATE = DEFENSE_CARDS.flatMap((card) => [card.id, card.id, card.id]);
 
 const RAW_PLAYERS = (playersCollection.players as RawCollectionPlayer[]).map((player) => ({ ...player }));
+const CPU_NAMES = [
+  "I. Petrov",
+  "D. Morel",
+  "K. Varga",
+  "T. Ndlovu",
+  "O. Sato",
+  "P. Duarte",
+  "N. Silva",
+  "E. Novak",
+  "B. Haddad",
+  "Y. Costa",
+  "C. Jensen",
+  "M. Okoro",
+  "R. Bianchi",
+  "L. Popov",
+  "A. Farah",
+  "V. Nowak",
+  "S. Romero",
+  "J. Diallo",
+  "F. Kovac",
+  "H. Tanaka",
+];
 
 export class CardFootballEngine {
   private readonly rng: RNG;
@@ -475,8 +585,14 @@ export class CardFootballEngine {
     const seed = options.rngSeed ?? 1337;
     this.rng = new RNG(seed);
     const kickoffTeam = options.kickoffTeamFirstHalf ?? (this.rng.next() >= 0.5 ? "HOME" : "AWAY");
-    const homeTeam = buildTeamRoster("HOME", HOME_LABEL, "LEFT", this.shuffle(RAW_PLAYERS, this.rng));
-    const awayTeam = buildTeamRoster("AWAY", AWAY_LABEL, "RIGHT", this.shuffle(rotateArray(RAW_PLAYERS, 7), this.rng));
+    const homeTeam = buildTeamRoster("HOME", HOME_LABEL, "LEFT", this.shuffle(RAW_PLAYERS, this.rng), "CONTROL");
+    const awayTeam = buildTeamRoster(
+      "AWAY",
+      AWAY_LABEL,
+      "RIGHT",
+      this.shuffle(buildCpuPlayerPool(rotateArray(RAW_PLAYERS, 7)), this.rng),
+      PLAYSTYLE_LIST[this.rng.int(0, PLAYSTYLE_LIST.length - 1)]
+    );
 
     this.state = {
       seed,
@@ -492,6 +608,8 @@ export class CardFootballEngine {
         x: 50,
         y: 32,
       },
+      pressure: { HOME: 0, AWAY: 0 },
+      restart: null,
       teams: {
         HOME: homeTeam,
         AWAY: awayTeam,
@@ -509,7 +627,7 @@ export class CardFootballEngine {
     };
 
     this.repositionPlayers();
-    this.startRound(kickoffTeam, `Coin toss: ${this.labelForTeam(kickoffTeam)} kick off the match.`);
+    this.startRound(kickoffTeam, `Coin toss: ${this.labelForTeam(kickoffTeam)} kick off the match.`, true);
   }
 
   getState(): MatchStateView {
@@ -528,12 +646,15 @@ export class CardFootballEngine {
         id: teamId,
         label: this.state.teams[teamId].label,
         tactic: this.state.teams[teamId].tactic,
+        playstyle: this.state.teams[teamId].playstyle,
         substitutionsUsed: this.state.teams[teamId].substitutionsUsed,
         lineup: SLOT_ORDER.map((slotId) => this.toLineupView(this.state.teams[teamId].lineup[slotId])),
         bench: this.state.teams[teamId].bench.map((player) => this.toLineupView(player)),
       })),
       pitchPlayers: this.getPitchPlayers(),
       ball: { ...this.state.ball },
+      pressure: { ...this.state.pressure },
+      restart: this.state.restart ? { ...this.state.restart } : null,
       commentaryFeed: [...this.state.commentaryFeed],
       winner: this.state.winner,
       stats: {
@@ -628,6 +749,7 @@ export class CardFootballEngine {
     }
 
     const attackingCard = getAttackCard(cardId);
+    this.state.restart = null;
     const defenseHand = this.drawCardsFor("AWAY", "DEFENSE", DEFENSE_HAND_SIZE);
     const defendingCard = this.chooseCpuDefenseCard(attackingCard, defenseHand);
     const before = this.capturePositions();
@@ -669,6 +791,7 @@ export class CardFootballEngine {
     }
 
     const attackingCard = getAttackCard(cpuPending.cardId);
+    this.state.restart = null;
     const defendingCard = getDefenseCard(cardId);
     const before = this.capturePositions();
     const resolution =
@@ -726,7 +849,7 @@ export class CardFootballEngine {
     this.state.teams.HOME.bench = this.state.teams.HOME.bench.map((player) => ({ ...player, side: "RIGHT" }));
     this.state.teams.AWAY.bench = this.state.teams.AWAY.bench.map((player) => ({ ...player, side: "LEFT" }));
     this.repositionPlayers();
-    this.startRound(oppositeTeam(this.state.kickoffTeamFirstHalf), "Second half. The teams switch ends and play restarts.");
+    this.startRound(oppositeTeam(this.state.kickoffTeamFirstHalf), "Second half. The teams switch ends and play restarts.", true);
   }
 
   private afterAction(resolution: ActionResolutionView) {
@@ -737,6 +860,7 @@ export class CardFootballEngine {
       this.state.turnMode = this.state.phase === "FULLTIME" ? "FULLTIME" : "HALFTIME";
       this.state.currentHand = [];
       this.state.cpuPendingAttack = null;
+      this.state.restart = null;
       return;
     }
 
@@ -747,6 +871,7 @@ export class CardFootballEngine {
           this.state.phase = "HALFTIME";
           this.state.turnMode = "HALFTIME";
           this.state.currentHand = [];
+          this.state.restart = null;
           this.state.commentaryFeed = [
             "Halftime on the whistle.",
             "Make your tactical changes and use the bench.",
@@ -758,7 +883,7 @@ export class CardFootballEngine {
         this.finishMatch();
         return;
       }
-      this.startRound(nextTeam, resolution.summary);
+      this.startRound(nextTeam, resolution.summary, false);
       return;
     }
 
@@ -772,20 +897,38 @@ export class CardFootballEngine {
       throw new Error("Invalid pass target");
     }
 
-    const laneRisk = this.measureLaneRisk("HOME", passer.x, passer.y, target.x, target.y);
-    const previewChance = this.previewPassChance(attackingCard, passer, target, laneRisk);
-    const defensePenalty = defendingCard.passStop + (dist(passer, target) > 22 ? defendingCard.longBallStop : 0);
+    const plan = this.simulateMovementPhase("HOME", {
+      kind: "PASS",
+      ballHolderId: passer.playerId,
+      targetX: target.x,
+      targetY: target.y,
+      targetPlayerId: target.playerId,
+      attackingCard,
+      defendingCard,
+    });
+    const movedPasser = this.getMovedPoint(plan, passer);
+    const movedTarget = this.getMovedPoint(plan, target);
+    const pressure = this.findPassPressure("AWAY", movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y, plan);
+    const laneRisk = clamp(
+      pressure.reduce((sum, candidate) => sum + (1 - candidate.proximity / PASS_PRESSURE_RADIUS) * (candidate.player.blocking / 100) * PASS_PRESSURE_WEIGHT, 0),
+      0,
+      1
+    );
+    const previewChance = this.previewPassChance(attackingCard, passer, target, laneRisk, movedPasser, movedTarget);
+    const defensePenalty = defendingCard.passStop + (distance(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y) > 22 ? defendingCard.longBallStop : 0);
     const tacticBonus = TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pass - TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pressing;
-    const chance = clamp(Math.round(previewChance + tacticBonus - defensePenalty), 5, 95);
+    const pressureBoost = this.state.pressure.HOME * 0.12;
+    const chance = clamp(Math.round(previewChance + tacticBonus + pressureBoost - defensePenalty), 5, 95);
     const success = this.rng.int(1, 100) <= chance;
 
     if (success) {
+      this.applyMovementPlan(plan);
       this.state.stats.HOME.successfulPasses += 1;
+      this.raisePressure("HOME", this.getPassPressureGain(attackingCard, movedPasser, movedTarget));
       this.state.ball.teamId = "HOME";
       this.state.ball.holderId = target.playerId;
-      this.state.ball.x = target.x;
-      this.state.ball.y = target.y;
-      this.nudgeAttack("HOME", target.slotId, attackingCard.flair + 2);
+      this.state.ball.x = movedTarget.x;
+      this.state.ball.y = movedTarget.y;
       return this.buildResolution(before, {
         title: "Pass Complete",
         summary: `${passer.name} finds ${target.name}.`,
@@ -802,21 +945,99 @@ export class CardFootballEngine {
       });
     }
 
-    const interceptor = this.pickInterceptor(target.x, target.y, "AWAY");
+    this.applyMovementPlan(plan);
     this.state.stats.HOME.failedPasses += 1;
-    this.state.stats.AWAY.interceptions += 1;
     this.state.ball.teamId = "AWAY";
-    this.state.ball.holderId = interceptor.playerId;
-    this.state.ball.x = interceptor.x;
-    this.state.ball.y = interceptor.y;
-    this.nudgeAttack("AWAY", interceptor.slotId, 2);
+    if (pressure.length > 0) {
+      if (this.shouldAwardAttackingThrowIn(attackingCard, movedTarget, pressure[0].proximity)) {
+        const throwInPoint = this.getTouchlineRestartPoint(movedTarget.x, movedTarget.y);
+        this.setRestart("THROW_IN", "HOME", "Throw-in to Blackflag City", throwInPoint.x, throwInPoint.y, this.getThrowInSlots(throwInPoint.y));
+        this.raisePressure("HOME", 8);
+        return this.buildResolution(before, {
+          title: "Throw-In Won",
+          summary: `${target.name} cannot reach it, but the deflection keeps the attack alive.`,
+          commentary: [
+            `${passer.name} tries to force the lane and the defender only gets a touch.`,
+            `The ball skids out on the flank. Throw-in to ${this.labelForTeam("HOME")}.`,
+            `${this.labelForTeam("HOME")} keep the round going from the restart.`,
+          ],
+          possessionAfter: "HOME",
+          roundEnded: false,
+          goalScored: false,
+          attackingCard: this.toCardView(attackingCard),
+          defendingCard: this.toCardView(defendingCard),
+        });
+      }
+      const interceptor = pressure[0].player;
+      this.state.stats.AWAY.interceptions += 1;
+      this.resetPressure();
+      this.state.ball.holderId = interceptor.playerId;
+      this.state.ball.x = interceptor.x;
+      this.state.ball.y = interceptor.y;
+      return this.buildResolution(before, {
+        title: "Intercepted",
+        summary: `${target.name} cannot get there. ${interceptor.name} steps in.`,
+        commentary: [
+          `${passer.name} forces the pass and the lane closes in a heartbeat.`,
+          `${interceptor.name} is close enough to cut across the ball and take it.`,
+          `Turn over. ${this.labelForTeam("AWAY")} start a new attack.`,
+        ],
+        possessionAfter: "AWAY",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    const looseBall = this.projectLoosePassPoint(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y);
+    if (this.isNearTouchline(looseBall.y)) {
+      this.setRestart("THROW_IN", "AWAY", "Throw-in to CPU Athletic", looseBall.x, looseBall.y, this.getThrowInSlots(looseBall.y));
+      this.resetPressure();
+      return this.buildResolution(before, {
+        title: "Pass Out Of Play",
+        summary: `${passer.name} sends it out on the touchline.`,
+        commentary: [
+          `${passer.name} gets the weight wrong and the ball races away from everyone.`,
+          `It rolls out near the sideline. Throw-in to ${this.labelForTeam("AWAY")}.`,
+          `Turn over. ${this.labelForTeam("AWAY")} start from the restart spot.`,
+        ],
+        possessionAfter: "AWAY",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    const collector = this.pickLooseBallWinner(looseBall.x, looseBall.y, "AWAY");
+    this.placeBallWithPlayer(collector, looseBall.x, looseBall.y);
+    if (collector.teamId === "HOME") {
+      this.raisePressure("HOME", 7);
+      return this.buildResolution(before, {
+        title: "Loose Ball Kept Alive",
+        summary: `${passer.name} misses the target, but ${collector.name} reacts first.`,
+        commentary: [
+          `${passer.name} overhits the first idea and the ball spills into space.`,
+          `${collector.name} is quickest to the second ball and keeps the move alive.`,
+          `${this.labelForTeam("HOME")} stay in the round.`,
+        ],
+        possessionAfter: "HOME",
+        roundEnded: false,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    this.resetPressure();
     return this.buildResolution(before, {
-      title: "Intercepted",
-      summary: `${target.name} cannot get there. ${interceptor.name} steps in.`,
+      title: "Pass Misplayed",
+      summary: `${passer.name} overhits it and the move dies.`,
       commentary: [
-        `${passer.name} forces the pass and the lane closes in a heartbeat.`,
-        `${interceptor.name} reads it and cuts the move out.`,
-        `Turn over. ${this.labelForTeam("AWAY")} start a new attack.`,
+        `${passer.name} shapes the pass, but nobody can reach the ball in time.`,
+        `It skids loose near ${collector.name}, who gathers it for ${this.labelForTeam("AWAY")}.`,
+        `Turn over. The defense were not close enough to intercept, but the attack still breaks down.`,
       ],
       possessionAfter: "AWAY",
       roundEnded: true,
@@ -829,20 +1050,38 @@ export class CardFootballEngine {
   private resolveCpuPass(attackingCard: AttackCardDef, defendingCard: DefenseCardDef, before: Map<string, { x: number; y: number }>) {
     const passer = this.getBallHolder();
     const target = this.getCpuPassTargets(attackingCard)[0] ?? this.state.teams.AWAY.lineup.CM;
-    const laneRisk = this.measureLaneRisk("AWAY", passer.x, passer.y, target.x, target.y);
-    const previewChance = this.previewPassChance(attackingCard, passer, target, laneRisk);
-    const defensePenalty = defendingCard.passStop + (dist(passer, target) > 22 ? defendingCard.longBallStop : 0);
+    const plan = this.simulateMovementPhase("AWAY", {
+      kind: "PASS",
+      ballHolderId: passer.playerId,
+      targetX: target.x,
+      targetY: target.y,
+      targetPlayerId: target.playerId,
+      attackingCard,
+      defendingCard,
+    });
+    const movedPasser = this.getMovedPoint(plan, passer);
+    const movedTarget = this.getMovedPoint(plan, target);
+    const pressure = this.findPassPressure("HOME", movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y, plan);
+    const laneRisk = clamp(
+      pressure.reduce((sum, candidate) => sum + (1 - candidate.proximity / PASS_PRESSURE_RADIUS) * (candidate.player.blocking / 100) * PASS_PRESSURE_WEIGHT, 0),
+      0,
+      1
+    );
+    const previewChance = this.previewPassChance(attackingCard, passer, target, laneRisk, movedPasser, movedTarget);
+    const defensePenalty = defendingCard.passStop + (distance(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y) > 22 ? defendingCard.longBallStop : 0);
     const tacticBonus = TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pass - TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pressing;
-    const chance = clamp(Math.round(previewChance + tacticBonus - defensePenalty), 5, 95);
+    const pressureBoost = this.state.pressure.AWAY * 0.12;
+    const chance = clamp(Math.round(previewChance + tacticBonus + pressureBoost - defensePenalty), 5, 95);
     const success = this.rng.int(1, 100) <= chance;
 
     if (success) {
+      this.applyMovementPlan(plan);
       this.state.stats.AWAY.successfulPasses += 1;
+      this.raisePressure("AWAY", this.getPassPressureGain(attackingCard, movedPasser, movedTarget));
       this.state.ball.teamId = "AWAY";
       this.state.ball.holderId = target.playerId;
-      this.state.ball.x = target.x;
-      this.state.ball.y = target.y;
-      this.nudgeAttack("AWAY", target.slotId, attackingCard.flair + 2);
+      this.state.ball.x = movedTarget.x;
+      this.state.ball.y = movedTarget.y;
       return this.buildResolution(before, {
         title: "CPU Pass Complete",
         summary: `${passer.name} finds ${target.name}.`,
@@ -859,21 +1098,99 @@ export class CardFootballEngine {
       });
     }
 
-    const interceptor = this.pickInterceptor(target.x, target.y, "HOME");
+    this.applyMovementPlan(plan);
     this.state.stats.AWAY.failedPasses += 1;
-    this.state.stats.HOME.interceptions += 1;
     this.state.ball.teamId = "HOME";
-    this.state.ball.holderId = interceptor.playerId;
-    this.state.ball.x = interceptor.x;
-    this.state.ball.y = interceptor.y;
-    this.nudgeAttack("HOME", interceptor.slotId, 2);
+    if (pressure.length > 0) {
+      if (this.shouldAwardAttackingThrowIn(attackingCard, movedTarget, pressure[0].proximity)) {
+        const throwInPoint = this.getTouchlineRestartPoint(movedTarget.x, movedTarget.y);
+        this.setRestart("THROW_IN", "AWAY", "Throw-in to CPU Athletic", throwInPoint.x, throwInPoint.y, this.getThrowInSlots(throwInPoint.y));
+        this.raisePressure("AWAY", 8);
+        return this.buildResolution(before, {
+          title: "CPU Throw-In Won",
+          summary: `The pressure only glances the pass away.`,
+          commentary: [
+            `The CPU force the pass and a touch sends it spinning toward the line.`,
+            `Throw-in to ${this.labelForTeam("AWAY")}. They keep the round alive.`,
+            `${this.labelForTeam("HOME")} must reset quickly.`,
+          ],
+          possessionAfter: "AWAY",
+          roundEnded: false,
+          goalScored: false,
+          attackingCard: this.toCardView(attackingCard),
+          defendingCard: this.toCardView(defendingCard),
+        });
+      }
+      const interceptor = pressure[0].player;
+      this.state.stats.HOME.interceptions += 1;
+      this.resetPressure();
+      this.state.ball.holderId = interceptor.playerId;
+      this.state.ball.x = interceptor.x;
+      this.state.ball.y = interceptor.y;
+      return this.buildResolution(before, {
+        title: "Interception",
+        summary: `${interceptor.name} jumps the pass.`,
+        commentary: [
+          `The CPU tries to force it through traffic.`,
+          `${interceptor.name} is close enough to step across the lane and steal it.`,
+          `Turn over. ${this.labelForTeam("HOME")} break the other way.`,
+        ],
+        possessionAfter: "HOME",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    const looseBall = this.projectLoosePassPoint(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y);
+    if (this.isNearTouchline(looseBall.y)) {
+      this.setRestart("THROW_IN", "HOME", "Throw-in to Blackflag City", looseBall.x, looseBall.y, this.getThrowInSlots(looseBall.y));
+      this.resetPressure();
+      return this.buildResolution(before, {
+        title: "CPU Pass Out",
+        summary: `${passer.name} plays it straight into touch.`,
+        commentary: [
+          `The CPU have the picture, but not the weight of pass.`,
+          `It runs out on the line. Throw-in to ${this.labelForTeam("HOME")}.`,
+          `Turn over. You restart from the flank.`,
+        ],
+        possessionAfter: "HOME",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    const collector = this.pickLooseBallWinner(looseBall.x, looseBall.y, "HOME");
+    this.placeBallWithPlayer(collector, looseBall.x, looseBall.y);
+    if (collector.teamId === "AWAY") {
+      this.raisePressure("AWAY", 7);
+      return this.buildResolution(before, {
+        title: "CPU Recover The Loose Ball",
+        summary: `${passer.name} misses the target, but the attack survives.`,
+        commentary: [
+          `The CPU misjudge the first pass and it skips into space.`,
+          `${collector.name} is first to the second ball and keeps the move alive.`,
+          `${this.labelForTeam("AWAY")} stay on the front foot.`,
+        ],
+        possessionAfter: "AWAY",
+        roundEnded: false,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    this.resetPressure();
     return this.buildResolution(before, {
-      title: "Interception",
-      summary: `${interceptor.name} jumps the pass.`,
+      title: "CPU Misplays It",
+      summary: `${passer.name} sends it out of reach.`,
       commentary: [
-        `The CPU tries to force it through traffic.`,
-        `${interceptor.name} has read it the whole way and cuts in front.`,
-        `Turn over. ${this.labelForTeam("HOME")} break the other way.`,
+        `The CPU sees the pass, but the weight is wrong.`,
+        `${collector.name} is nearest to the loose ball and sweeps it up for ${this.labelForTeam("HOME")}.`,
+        `Turn over. Your team start a fresh attack.`,
       ],
       possessionAfter: "HOME",
       roundEnded: true,
@@ -886,18 +1203,42 @@ export class CardFootballEngine {
   private resolveDribble(attackingCard: AttackCardDef, defendingCard: DefenseCardDef, targetX: number, targetY: number, before: Map<string, { x: number; y: number }>) {
     const holder = this.getBallHolder();
     const clampedTarget = clampDribbleTarget(holder, targetX, targetY, attackingCard.radius);
-    const chance = this.resolveDribbleChance(attackingCard, holder, clampedTarget.x, clampedTarget.y, defendingCard);
+    const plan = this.simulateMovementPhase("HOME", {
+      kind: "DRIBBLE",
+      ballHolderId: holder.playerId,
+      targetX: clampedTarget.x,
+      targetY: clampedTarget.y,
+      attackingCard,
+      defendingCard,
+    });
+    const movedHolder = this.getMovedPoint(plan, holder);
+    const pressure = this.findDribblePressure("AWAY", holder.x, holder.y, movedHolder.x, movedHolder.y, plan);
+    const closestPressure = pressure[0];
+    const progress = this.getAttackDirection("HOME") === "RIGHT" ? movedHolder.x - holder.x : holder.x - movedHolder.x;
+    const chance =
+      clamp(
+        Math.round(
+          (34 +
+            holder.stats.dri * 0.44 +
+            holder.stats.pac * 0.22 +
+            attackingCard.flair * 3 +
+            progress * 1.6 +
+            (TACTIC_MODIFIERS[this.state.teams.HOME.tactic].dribble - TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pressing) * 2 -
+            Math.max(0, attackingCard.requiredStars - holder.skillStars) * 8 -
+            defendingCard.dribbleStop * 2.8 -
+            (closestPressure ? (1 - closestPressure.proximity / DRIBBLE_PRESSURE_RADIUS) * DRIBBLE_PRESSURE_WEIGHT : -6)) / 2
+        ),
+        4,
+        97
+      );
     const success = this.rng.int(1, 100) <= chance;
 
     if (success) {
+      this.applyMovementPlan(plan);
       this.state.stats.HOME.successfulDribbles += 1;
-      this.state.ball.x = clampedTarget.x;
-      this.state.ball.y = clampedTarget.y;
-      this.mutateLineupPlayer(holder.playerId, (player) => {
-        player.x = clampedTarget.x;
-        player.y = clampedTarget.y;
-      });
-      this.nudgeAttack("HOME", holder.slotId, attackingCard.flair + 3);
+      this.raisePressure("HOME", this.getDribblePressureGain(attackingCard, movedHolder, holder));
+      this.state.ball.x = movedHolder.x;
+      this.state.ball.y = movedHolder.y;
       return this.buildResolution(before, {
         title: "Dribble Won",
         summary: `${holder.name} skips away from the challenge.`,
@@ -914,21 +1255,64 @@ export class CardFootballEngine {
       });
     }
 
-    const tackler = this.pickNearestDefender(clampedTarget.x, clampedTarget.y, "AWAY");
+    this.applyMovementPlan(plan);
     this.state.stats.HOME.failedDribbles += 1;
-    this.state.stats.AWAY.tacklesWon += 1;
-    this.state.ball.teamId = "AWAY";
-    this.state.ball.holderId = tackler.playerId;
-    this.state.ball.x = tackler.x;
-    this.state.ball.y = tackler.y;
-    this.nudgeAttack("AWAY", tackler.slotId, 2);
+    if (pressure.length > 0 && this.isCleanTackleWindow(pressure[0], defendingCard)) {
+      const tackler = pressure[0].player;
+      this.state.stats.AWAY.tacklesWon += 1;
+      this.resetPressure();
+      this.state.ball.teamId = "AWAY";
+      this.state.ball.holderId = tackler.playerId;
+      this.state.ball.x = tackler.x;
+      this.state.ball.y = tackler.y;
+      return this.buildResolution(before, {
+        title: "Tackle Won",
+        summary: `${tackler.name} strips the ball away.`,
+        commentary: [
+          `${holder.name} tries to force the dribble through traffic.`,
+          `${tackler.name} gets close enough during the movement phase and wins it cleanly.`,
+          `Turn over. ${this.labelForTeam("AWAY")} have the next round.`,
+        ],
+        possessionAfter: "AWAY",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    const looseBall = {
+      x: round1(clamp((holder.x + movedHolder.x) / 2 + this.randomBetween(-1.4, 1.4), 2, 98)),
+      y: round1(clamp((holder.y + movedHolder.y) / 2 + this.randomBetween(-1.8, 1.8), 4, 60)),
+    };
+    const collector = this.pickLooseBallWinner(looseBall.x, looseBall.y, pressure.length > 0 ? "AWAY" : "HOME");
+    this.placeBallWithPlayer(collector, looseBall.x, looseBall.y);
+    if (collector.teamId === "HOME") {
+      this.raisePressure("HOME", 5);
+      return this.buildResolution(before, {
+        title: "Ricochet Won",
+        summary: `${holder.name} loses the clean touch, but a teammate keeps it alive.`,
+        commentary: [
+          `${holder.name} knocks it too far and the ball ricochets into a crowded lane.`,
+          `${collector.name} reacts first to the loose touch and restores the move.`,
+          `${this.labelForTeam("HOME")} stay in possession.`,
+        ],
+        possessionAfter: "HOME",
+        roundEnded: false,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    this.resetPressure();
     return this.buildResolution(before, {
-      title: "Tackle Won",
-      summary: `${tackler.name} strips the ball away.`,
+      title: "Loose Ball Lost",
+      summary: `${holder.name} loses the bounce and the move is gone.`,
       commentary: [
-        `${holder.name} tries to force the dribble through traffic.`,
-        `${tackler.name} times the challenge and wins it cleanly.`,
-        `Turn over. ${this.labelForTeam("AWAY")} have the next round.`,
+        `${holder.name} gets the dribble wrong and the ball runs away into pressure.`,
+        `${collector.name} wins the scramble and turns play around for ${this.labelForTeam("AWAY")}.`,
+        `Turn over. ${this.labelForTeam("AWAY")} take the next round.`,
       ],
       possessionAfter: "AWAY",
       roundEnded: true,
@@ -941,18 +1325,42 @@ export class CardFootballEngine {
   private resolveCpuDribble(attackingCard: AttackCardDef, defendingCard: DefenseCardDef, before: Map<string, { x: number; y: number }>) {
     const holder = this.getBallHolder();
     const target = this.pickCpuDribbleTarget(holder, attackingCard);
-    const chance = this.resolveDribbleChance(attackingCard, holder, target.x, target.y, defendingCard);
+    const plan = this.simulateMovementPhase("AWAY", {
+      kind: "DRIBBLE",
+      ballHolderId: holder.playerId,
+      targetX: target.x,
+      targetY: target.y,
+      attackingCard,
+      defendingCard,
+    });
+    const movedHolder = this.getMovedPoint(plan, holder);
+    const pressure = this.findDribblePressure("HOME", holder.x, holder.y, movedHolder.x, movedHolder.y, plan);
+    const closestPressure = pressure[0];
+    const progress = this.getAttackDirection("AWAY") === "RIGHT" ? movedHolder.x - holder.x : holder.x - movedHolder.x;
+    const chance =
+      clamp(
+        Math.round(
+          (34 +
+            holder.stats.dri * 0.44 +
+            holder.stats.pac * 0.22 +
+            attackingCard.flair * 3 +
+            progress * 1.6 +
+            (TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].dribble - TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pressing) * 2 -
+            Math.max(0, attackingCard.requiredStars - holder.skillStars) * 8 -
+            defendingCard.dribbleStop * 2.8 -
+            (closestPressure ? (1 - closestPressure.proximity / DRIBBLE_PRESSURE_RADIUS) * DRIBBLE_PRESSURE_WEIGHT : -6)) / 2
+        ),
+        4,
+        97
+      );
     const success = this.rng.int(1, 100) <= chance;
 
     if (success) {
+      this.applyMovementPlan(plan);
       this.state.stats.AWAY.successfulDribbles += 1;
-      this.state.ball.x = target.x;
-      this.state.ball.y = target.y;
-      this.mutateLineupPlayer(holder.playerId, (player) => {
-        player.x = target.x;
-        player.y = target.y;
-      });
-      this.nudgeAttack("AWAY", holder.slotId, attackingCard.flair + 3);
+      this.raisePressure("AWAY", this.getDribblePressureGain(attackingCard, movedHolder, holder));
+      this.state.ball.x = movedHolder.x;
+      this.state.ball.y = movedHolder.y;
       return this.buildResolution(before, {
         title: "CPU Dribble",
         summary: `${holder.name} beats the first challenge.`,
@@ -969,20 +1377,63 @@ export class CardFootballEngine {
       });
     }
 
-    const tackler = this.pickNearestDefender(target.x, target.y, "HOME");
+    this.applyMovementPlan(plan);
     this.state.stats.AWAY.failedDribbles += 1;
-    this.state.stats.HOME.tacklesWon += 1;
-    this.state.ball.teamId = "HOME";
-    this.state.ball.holderId = tackler.playerId;
-    this.state.ball.x = tackler.x;
-    this.state.ball.y = tackler.y;
-    this.nudgeAttack("HOME", tackler.slotId, 2);
+    if (pressure.length > 0 && this.isCleanTackleWindow(pressure[0], defendingCard)) {
+      const tackler = pressure[0].player;
+      this.state.stats.HOME.tacklesWon += 1;
+      this.resetPressure();
+      this.state.ball.teamId = "HOME";
+      this.state.ball.holderId = tackler.playerId;
+      this.state.ball.x = tackler.x;
+      this.state.ball.y = tackler.y;
+      return this.buildResolution(before, {
+        title: "Turnover Won",
+        summary: `${tackler.name} takes it away.`,
+        commentary: [
+          `The CPU tries to carry through pressure.`,
+          `${tackler.name} gets close enough during the movement phase and wins the ball.`,
+          `Turn over. ${this.labelForTeam("HOME")} get the next attack.`,
+        ],
+        possessionAfter: "HOME",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    const looseBall = {
+      x: round1(clamp((holder.x + movedHolder.x) / 2 + this.randomBetween(-1.4, 1.4), 2, 98)),
+      y: round1(clamp((holder.y + movedHolder.y) / 2 + this.randomBetween(-1.8, 1.8), 4, 60)),
+    };
+    const collector = this.pickLooseBallWinner(looseBall.x, looseBall.y, pressure.length > 0 ? "HOME" : "AWAY");
+    this.placeBallWithPlayer(collector, looseBall.x, looseBall.y);
+    if (collector.teamId === "AWAY") {
+      this.raisePressure("AWAY", 5);
+      return this.buildResolution(before, {
+        title: "CPU Keep The Scrap",
+        summary: `${holder.name} stumbles, but the CPU win the second ball.`,
+        commentary: [
+          `The dribble gets messy and the ball spills out of the tackle window.`,
+          `${collector.name} reacts first and the attack survives.`,
+          `${this.labelForTeam("AWAY")} keep the round alive.`,
+        ],
+        possessionAfter: "AWAY",
+        roundEnded: false,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
+
+    this.resetPressure();
     return this.buildResolution(before, {
-      title: "Turnover Won",
-      summary: `${tackler.name} takes it away.`,
+      title: "CPU Lose The Scrap",
+      summary: `${holder.name} cannot recover the heavy touch.`,
       commentary: [
-        `The CPU tries to carry through pressure.`,
-        `${tackler.name} steps in and leaves with the ball.`,
+        `The CPU overcarry the dribble and the ball pops loose in traffic.`,
+        `${collector.name} wins the second ball and turns play around.`,
         `Turn over. ${this.labelForTeam("HOME")} get the next attack.`,
       ],
       possessionAfter: "HOME",
@@ -995,13 +1446,24 @@ export class CardFootballEngine {
 
   private resolveShot(attackingCard: AttackCardDef, defendingCard: DefenseCardDef, shot: ShotInput, before: Map<string, { x: number; y: number }>) {
     const shooter = this.getBallHolder();
+    const goalX = this.getAttackDirection("HOME") === "RIGHT" ? 100 : 0;
+    const plan = this.simulateMovementPhase("HOME", {
+      kind: "SHOT",
+      ballHolderId: shooter.playerId,
+      targetX: goalX,
+      targetY: 32,
+      attackingCard,
+      defendingCard,
+    });
+    const movedShooter = this.getMovedPoint(plan, shooter);
     const keeper = this.state.teams.AWAY.lineup.GK;
-    const laneBlockers = this.getTeamPlayers("AWAY").filter((player) => player.slotId !== "GK" && this.distanceToShotLane(player, shooter) < 5.6);
-    const distanceTier = this.getDistanceTier(shooter);
+    const laneBlockers = this.getMovedTeamPlayers("AWAY", plan).filter((player) => player.slotId !== "GK" && this.distanceToShotLane(player, { ...shooter, ...movedShooter }) < 3.8);
+    const distanceTier = this.getDistanceTier({ ...shooter, ...movedShooter });
     const distancePenalty = distanceTier === "CLOSE" ? 0 : distanceTier === "MID" ? 8 : 18;
     const blockerPenalty = laneBlockers.reduce((sum, player) => sum + player.blocking / 34, 0);
     const cardPenalty = defendingCard.shotStop + laneBlockers.length * (defendingCard.kind === "BLOCK" ? 1.6 : 0.5);
     const tacticBonus = TACTIC_MODIFIERS[this.state.teams.HOME.tactic].shot - TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pressing;
+    const pressureBoost = this.state.pressure.HOME * 0.18;
     const raw =
       18 +
       shooter.stats.sho * 0.55 +
@@ -1009,6 +1471,7 @@ export class CardFootballEngine {
       attackingCard.shootingBoost * 2.6 +
       clamp01(shot.aimQuality) * 18 +
       clamp01(shot.powerQuality) * 14 +
+      pressureBoost +
       tacticBonus * 2 -
       distancePenalty -
       blockerPenalty * 4 -
@@ -1019,20 +1482,132 @@ export class CardFootballEngine {
     const onTarget = this.rng.int(1, 100) <= onTargetChance;
     const goal = onTarget && this.rng.int(1, 100) <= goalChance;
     this.state.stats.HOME.shots += 1;
+    this.applyMovementPlan(plan);
+
+    const blockChance =
+      laneBlockers.length === 0
+        ? 0
+        : clamp(
+            Math.round(
+              12 +
+                laneBlockers.length * 8 +
+                blockerPenalty * 5 +
+                defendingCard.shotStop * 3 +
+                (defendingCard.id === "PROTECT_MIDDLE" ? 8 : 0) +
+                (defendingCard.kind === "BLOCK" ? 6 : 0)
+            ),
+            0,
+            64
+          );
+    const blocked = laneBlockers.length > 0 && this.rng.int(1, 100) <= blockChance;
+
+    if (blocked) {
+      const blocker = laneBlockers[0];
+      const deflectPoint = {
+        x: round1(clamp(blocker.x + (goalX > blocker.x ? -1.6 : 1.6), 2, 98)),
+        y: round1(clamp(blocker.y + this.randomBetween(-3.4, 3.4), 4, 60)),
+      };
+      if (this.shouldAwardCorner("HOME", deflectPoint)) {
+        const corner = this.getCornerPoint("HOME", deflectPoint.y);
+        this.setRestart("CORNER", "HOME", "Corner to Blackflag City", corner.x, corner.y, [deflectPoint.y < 32 ? "LW" : "RW", "LCM", "RCM"]);
+        this.raisePressure("HOME", 14);
+        return this.buildResolution(before, {
+          title: "Shot Blocked For Corner",
+          summary: `${blocker.name} blocks it behind.`,
+          commentary: [
+            `${shooter.name} lets it go through traffic and ${blocker.name} throws a body in the way.`,
+            `The deflection spins behind the goal. Corner to ${this.labelForTeam("HOME")}.`,
+            `${this.labelForTeam("HOME")} keep the pressure on.`,
+          ],
+          possessionAfter: "HOME",
+          roundEnded: false,
+          goalScored: false,
+          attackingCard: this.toCardView(attackingCard),
+          defendingCard: this.toCardView(defendingCard),
+        });
+      }
+
+      const collector = this.pickLooseBallWinner(deflectPoint.x, deflectPoint.y, "AWAY");
+      this.placeBallWithPlayer(collector, deflectPoint.x, deflectPoint.y);
+      if (collector.teamId === "HOME") {
+        this.state.restart = { type: "REBOUND", teamId: "HOME", label: "Rebound for Blackflag City", x: deflectPoint.x, y: deflectPoint.y };
+        this.raisePressure("HOME", 12);
+        return this.buildResolution(before, {
+          title: "Rebound Falls Kindly",
+          summary: `${blocker.name} blocks it, but the rebound stays alive.`,
+          commentary: [
+            `${blocker.name} gets in the way, but the block drops loose inside the area.`,
+            `${collector.name} is first to the rebound for ${this.labelForTeam("HOME")}.`,
+            `The round stays alive in a dangerous spot.`,
+          ],
+          possessionAfter: "HOME",
+          roundEnded: false,
+          goalScored: false,
+          attackingCard: this.toCardView(attackingCard),
+          defendingCard: this.toCardView(defendingCard),
+        });
+      }
+
+      this.resetPressure();
+      return this.buildResolution(before, {
+        title: "Shot Blocked",
+        summary: `${blocker.name} gets the block and the danger is cleared.`,
+        commentary: [
+          `${shooter.name} hits it and ${blocker.name} steps right into the lane.`,
+          `${collector.name} wins the second ball and clears the danger for ${this.labelForTeam("AWAY")}.`,
+          `Turn over. ${this.labelForTeam("AWAY")} take the next round.`,
+        ],
+        possessionAfter: "AWAY",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
 
     if (goal) {
       this.state.stats.HOME.shotsOnTarget += 1;
       this.state.stats.HOME.goals += 1;
       this.state.score.HOME += 1;
+      this.resetPressure();
       return this.handleGoal(before, "HOME", shooter, attackingCard, defendingCard);
     }
 
     if (onTarget) {
       this.state.stats.HOME.shotsOnTarget += 1;
+      const spill = this.rng.int(1, 100) <= clamp(Math.round(18 + this.state.pressure.HOME * 0.3 + attackingCard.shootingBoost * 2 - keeper.blocking * 0.16), 6, 42);
+      if (spill) {
+        const reboundPoint = {
+          x: round1(clamp(keeper.x + (goalX === 100 ? -2.4 : 2.4), 2, 98)),
+          y: round1(clamp(keeper.y + this.randomBetween(-5.2, 5.2), 4, 60)),
+        };
+        const collector = this.pickLooseBallWinner(reboundPoint.x, reboundPoint.y, "HOME");
+        this.placeBallWithPlayer(collector, reboundPoint.x, reboundPoint.y);
+        if (collector.teamId === "HOME") {
+          this.state.restart = { type: "REBOUND", teamId: "HOME", label: "Rebound for Blackflag City", x: reboundPoint.x, y: reboundPoint.y };
+          this.raisePressure("HOME", 18);
+          return this.buildResolution(before, {
+            title: "Save Spilled",
+            summary: `${keeper.name} cannot hold it.`,
+            commentary: [
+              `${shooter.name} gets the shot through and ${keeper.name} can only parry it away.`,
+              `${collector.name} reacts quickest to the rebound for ${this.labelForTeam("HOME")}.`,
+              `The round is still alive in front of goal.`,
+            ],
+            possessionAfter: "HOME",
+            roundEnded: false,
+            goalScored: false,
+            attackingCard: this.toCardView(attackingCard),
+            defendingCard: this.toCardView(defendingCard),
+          });
+        }
+      }
+
       this.state.ball.teamId = "AWAY";
       this.state.ball.holderId = keeper.playerId;
       this.state.ball.x = keeper.x;
       this.state.ball.y = keeper.y;
+      this.resetPressure();
       this.nudgeAttack("AWAY", "GK", 1);
       return this.buildResolution(before, {
         title: "Saved",
@@ -1054,6 +1629,8 @@ export class CardFootballEngine {
     this.state.ball.holderId = keeper.playerId;
     this.state.ball.x = keeper.x;
     this.state.ball.y = keeper.y;
+    this.setRestart("GOAL_KICK", "AWAY", "Goal kick to CPU Athletic", keeper.x, keeper.y, ["GK"]);
+    this.resetPressure();
     this.nudgeAttack("AWAY", "GK", 1);
     return this.buildResolution(before, {
       title: "Off Target",
@@ -1073,13 +1650,24 @@ export class CardFootballEngine {
 
   private resolveCpuShot(attackingCard: AttackCardDef, defendingCard: DefenseCardDef, before: Map<string, { x: number; y: number }>) {
     const shooter = this.getBallHolder();
+    const goalX = this.getAttackDirection("AWAY") === "RIGHT" ? 100 : 0;
+    const plan = this.simulateMovementPhase("AWAY", {
+      kind: "SHOT",
+      ballHolderId: shooter.playerId,
+      targetX: goalX,
+      targetY: 32,
+      attackingCard,
+      defendingCard,
+    });
+    const movedShooter = this.getMovedPoint(plan, shooter);
     const keeper = this.state.teams.HOME.lineup.GK;
-    const laneBlockers = this.getTeamPlayers("HOME").filter((player) => player.slotId !== "GK" && this.distanceToShotLane(player, shooter) < 5.6);
-    const distanceTier = this.getDistanceTier(shooter);
+    const laneBlockers = this.getMovedTeamPlayers("HOME", plan).filter((player) => player.slotId !== "GK" && this.distanceToShotLane(player, { ...shooter, ...movedShooter }) < 3.8);
+    const distanceTier = this.getDistanceTier({ ...shooter, ...movedShooter });
     const distancePenalty = distanceTier === "CLOSE" ? 0 : distanceTier === "MID" ? 8 : 18;
     const blockerPenalty = laneBlockers.reduce((sum, player) => sum + player.blocking / 34, 0);
     const cardPenalty = defendingCard.shotStop + laneBlockers.length * (defendingCard.kind === "BLOCK" ? 1.6 : 0.5);
     const tacticBonus = TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].shot - TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pressing;
+    const pressureBoost = this.state.pressure.AWAY * 0.18;
     const raw =
       18 +
       shooter.stats.sho * 0.55 +
@@ -1087,6 +1675,7 @@ export class CardFootballEngine {
       attackingCard.shootingBoost * 2.6 +
       this.rng.next() * 18 +
       this.rng.next() * 12 +
+      pressureBoost +
       tacticBonus * 2 -
       distancePenalty -
       blockerPenalty * 4 -
@@ -1097,20 +1686,132 @@ export class CardFootballEngine {
     const onTarget = this.rng.int(1, 100) <= onTargetChance;
     const goal = onTarget && this.rng.int(1, 100) <= goalChance;
     this.state.stats.AWAY.shots += 1;
+    this.applyMovementPlan(plan);
+
+    const blockChance =
+      laneBlockers.length === 0
+        ? 0
+        : clamp(
+            Math.round(
+              12 +
+                laneBlockers.length * 8 +
+                blockerPenalty * 5 +
+                defendingCard.shotStop * 3 +
+                (defendingCard.id === "PROTECT_MIDDLE" ? 8 : 0) +
+                (defendingCard.kind === "BLOCK" ? 6 : 0)
+            ),
+            0,
+            64
+          );
+    const blocked = laneBlockers.length > 0 && this.rng.int(1, 100) <= blockChance;
+
+    if (blocked) {
+      const blocker = laneBlockers[0];
+      const deflectPoint = {
+        x: round1(clamp(blocker.x + (goalX > blocker.x ? -1.6 : 1.6), 2, 98)),
+        y: round1(clamp(blocker.y + this.randomBetween(-3.4, 3.4), 4, 60)),
+      };
+      if (this.shouldAwardCorner("AWAY", deflectPoint)) {
+        const corner = this.getCornerPoint("AWAY", deflectPoint.y);
+        this.setRestart("CORNER", "AWAY", "Corner to CPU Athletic", corner.x, corner.y, [deflectPoint.y < 32 ? "LW" : "RW", "LCM", "RCM"]);
+        this.raisePressure("AWAY", 14);
+        return this.buildResolution(before, {
+          title: "CPU Win A Corner",
+          summary: `${blocker.name} blocks it behind.`,
+          commentary: [
+            `The CPU strike and ${blocker.name} only manages to turn it behind.`,
+            `Corner to ${this.labelForTeam("AWAY")}. The pressure stays on.`,
+            `${this.labelForTeam("HOME")} have to deal with another ball in.`,
+          ],
+          possessionAfter: "AWAY",
+          roundEnded: false,
+          goalScored: false,
+          attackingCard: this.toCardView(attackingCard),
+          defendingCard: this.toCardView(defendingCard),
+        });
+      }
+
+      const collector = this.pickLooseBallWinner(deflectPoint.x, deflectPoint.y, "HOME");
+      this.placeBallWithPlayer(collector, deflectPoint.x, deflectPoint.y);
+      if (collector.teamId === "AWAY") {
+        this.state.restart = { type: "REBOUND", teamId: "AWAY", label: "Rebound for CPU Athletic", x: deflectPoint.x, y: deflectPoint.y };
+        this.raisePressure("AWAY", 12);
+        return this.buildResolution(before, {
+          title: "CPU Rebound",
+          summary: `${blocker.name} blocks it, but the rebound stays alive.`,
+          commentary: [
+            `${blocker.name} gets a piece of it, but not enough to clear danger.`,
+            `${collector.name} is first to the rebound and the attack continues.`,
+            `${this.labelForTeam("AWAY")} keep the round alive around the box.`,
+          ],
+          possessionAfter: "AWAY",
+          roundEnded: false,
+          goalScored: false,
+          attackingCard: this.toCardView(attackingCard),
+          defendingCard: this.toCardView(defendingCard),
+        });
+      }
+
+      this.resetPressure();
+      return this.buildResolution(before, {
+        title: "Block And Clear",
+        summary: `${blocker.name} blocks it and your side clear.`,
+        commentary: [
+          `The CPU get the shot off, but ${blocker.name} stands up to the strike.`,
+          `${collector.name} gathers the second ball and takes the danger out of the area.`,
+          `Turn over. ${this.labelForTeam("HOME")} attack next.`,
+        ],
+        possessionAfter: "HOME",
+        roundEnded: true,
+        goalScored: false,
+        attackingCard: this.toCardView(attackingCard),
+        defendingCard: this.toCardView(defendingCard),
+      });
+    }
 
     if (goal) {
       this.state.stats.AWAY.shotsOnTarget += 1;
       this.state.stats.AWAY.goals += 1;
       this.state.score.AWAY += 1;
+      this.resetPressure();
       return this.handleGoal(before, "AWAY", shooter, attackingCard, defendingCard);
     }
 
     if (onTarget) {
       this.state.stats.AWAY.shotsOnTarget += 1;
+      const spill = this.rng.int(1, 100) <= clamp(Math.round(18 + this.state.pressure.AWAY * 0.3 + attackingCard.shootingBoost * 2 - keeper.blocking * 0.16), 6, 42);
+      if (spill) {
+        const reboundPoint = {
+          x: round1(clamp(keeper.x + (goalX === 100 ? -2.4 : 2.4), 2, 98)),
+          y: round1(clamp(keeper.y + this.randomBetween(-5.2, 5.2), 4, 60)),
+        };
+        const collector = this.pickLooseBallWinner(reboundPoint.x, reboundPoint.y, "AWAY");
+        this.placeBallWithPlayer(collector, reboundPoint.x, reboundPoint.y);
+        if (collector.teamId === "AWAY") {
+          this.state.restart = { type: "REBOUND", teamId: "AWAY", label: "Rebound for CPU Athletic", x: reboundPoint.x, y: reboundPoint.y };
+          this.raisePressure("AWAY", 18);
+          return this.buildResolution(before, {
+            title: "CPU Rebound Alive",
+            summary: `${keeper.name} spills it into danger.`,
+            commentary: [
+              `The CPU force the save and ${keeper.name} cannot hold the shot.`,
+              `${collector.name} pounces on the rebound and the attack is still alive.`,
+              `${this.labelForTeam("HOME")} are under sustained pressure.`,
+            ],
+            possessionAfter: "AWAY",
+            roundEnded: false,
+            goalScored: false,
+            attackingCard: this.toCardView(attackingCard),
+            defendingCard: this.toCardView(defendingCard),
+          });
+        }
+      }
+
       this.state.ball.teamId = "HOME";
       this.state.ball.holderId = keeper.playerId;
       this.state.ball.x = keeper.x;
       this.state.ball.y = keeper.y;
+      this.resetPressure();
       this.nudgeAttack("HOME", "GK", 1);
       return this.buildResolution(before, {
         title: "Save Made",
@@ -1132,6 +1833,8 @@ export class CardFootballEngine {
     this.state.ball.holderId = keeper.playerId;
     this.state.ball.x = keeper.x;
     this.state.ball.y = keeper.y;
+    this.setRestart("GOAL_KICK", "HOME", "Goal kick to Blackflag City", keeper.x, keeper.y, ["GK"]);
+    this.resetPressure();
     this.nudgeAttack("HOME", "GK", 1);
     return this.buildResolution(before, {
       title: "Missed",
@@ -1157,6 +1860,8 @@ export class CardFootballEngine {
     defendingCard: DefenseCardDef
   ) {
     const concedingTeam = oppositeTeam(scoringTeam);
+    this.state.restart = null;
+    this.resetPressure();
     this.state.ball.teamId = concedingTeam;
     this.state.ball.holderId = this.state.teams[concedingTeam].lineup.CM.playerId;
     this.state.ball.x = 50;
@@ -1180,9 +1885,8 @@ export class CardFootballEngine {
 
   private buildResolution(
     before: Map<string, { x: number; y: number }>,
-    data: Omit<ActionResolutionView, "animations" | "ball" | "cpuPreviewCard">
+    data: Omit<ActionResolutionView, "animations" | "ball" | "cpuPreviewCard" | "restart">
   ): ActionResolutionView {
-    this.repositionPlayers();
     const animations = this.getPitchPlayers().map((player) => {
       const previous = before.get(player.playerId) ?? { x: player.x, y: player.y };
       return {
@@ -1197,18 +1901,25 @@ export class CardFootballEngine {
       ...data,
       cpuPreviewCard: this.state.cpuPendingAttack ? this.toCardView(getAttackCard(this.state.cpuPendingAttack.cardId)) : null,
       ball: { ...this.state.ball },
+      restart: this.state.restart ? { ...this.state.restart } : null,
       animations,
     };
   }
 
-  private startRound(teamId: TeamId, openingLine: string) {
+  private startRound(teamId: TeamId, openingLine: string, resetToCenter: boolean) {
     this.state.currentRoundTeam = teamId;
     this.state.attackRoundsThisHalf[teamId] += 1;
-    this.state.ball.teamId = teamId;
-    this.state.ball.holderId = this.state.teams[teamId].lineup.CM.playerId;
-    this.state.ball.x = 50;
-    this.state.ball.y = 32;
-    this.repositionPlayers();
+    this.state.restart = null;
+    this.resetPressure();
+    if (resetToCenter) {
+      this.state.ball.teamId = teamId;
+      this.state.ball.holderId = this.state.teams[teamId].lineup.CM.playerId;
+      this.state.ball.x = 50;
+      this.state.ball.y = 32;
+      this.repositionPlayers();
+    } else {
+      this.syncBallHolderState();
+    }
     this.state.commentaryFeed = [openingLine];
     this.prepareTurn();
   }
@@ -1237,6 +1948,7 @@ export class CardFootballEngine {
     this.state.turnMode = "FULLTIME";
     this.state.currentHand = [];
     this.state.cpuPendingAttack = null;
+    this.state.restart = null;
     if (this.state.score.HOME > this.state.score.AWAY) {
       this.state.winner = "HOME";
     } else if (this.state.score.AWAY > this.state.score.HOME) {
@@ -1255,10 +1967,12 @@ export class CardFootballEngine {
     const cpuTeam = this.state.teams.AWAY;
     if (this.state.score.AWAY < this.state.score.HOME) {
       cpuTeam.tactic = "DIRECT";
+      cpuTeam.playstyle = "PRESSING";
     } else if (this.state.score.AWAY > this.state.score.HOME) {
       cpuTeam.tactic = "LOW_BLOCK";
+      cpuTeam.playstyle = "CONTROL";
     } else {
-      cpuTeam.tactic = "BALANCED";
+      cpuTeam.tactic = cpuTeam.playstyle === "WIDE" ? "WING_PLAY" : "BALANCED";
     }
   }
 
@@ -1286,39 +2000,159 @@ export class CardFootballEngine {
   }
 
   private chooseCpuDefenseCard(attackingCard: AttackCardDef, hand: string[]) {
+    const playstyle = this.state.teams.AWAY.playstyle;
     const ranked = hand
       .map((cardId) => getDefenseCard(cardId))
-      .sort((a, b) => this.scoreDefenseFit(b, attackingCard) - this.scoreDefenseFit(a, attackingCard));
+      .sort((a, b) => this.scoreDefenseFit(b, attackingCard, playstyle) - this.scoreDefenseFit(a, attackingCard, playstyle));
     return ranked[0];
   }
 
   private chooseCpuAttackCard(hand: string[]) {
     const holder = this.getBallHolder();
     const distanceTier = this.getDistanceTier(holder);
+    const playstyle = this.state.teams.AWAY.playstyle;
     const ranked = hand
       .map((cardId) => getAttackCard(cardId))
-      .sort((a, b) => this.scoreAttackFit(b, distanceTier, holder) - this.scoreAttackFit(a, distanceTier, holder));
+      .sort((a, b) => this.scoreAttackFit(b, distanceTier, holder, playstyle) - this.scoreAttackFit(a, distanceTier, holder, playstyle));
     return ranked[0]?.id ?? hand[0];
   }
 
-  private scoreDefenseFit(card: DefenseCardDef, attackCard: AttackCardDef) {
+  private scoreDefenseFit(card: DefenseCardDef, attackCard: AttackCardDef, playstyle: MatchPlaystyleId) {
     if (attackCard.kind === "PASS") {
-      return card.passStop + card.longBallStop;
+      return card.passStop + card.longBallStop + this.getDefenseStyleBias(card, attackCard, playstyle);
     }
     if (attackCard.kind === "DRIBBLE") {
-      return card.dribbleStop + (card.kind === "TACKLE" ? 3 : 0);
+      return card.dribbleStop + (card.kind === "TACKLE" ? 3 : 0) + this.getDefenseStyleBias(card, attackCard, playstyle);
     }
-    return card.shotStop + (card.kind === "BLOCK" ? 4 : 0);
+    return card.shotStop + (card.kind === "BLOCK" ? 4 : 0) + this.getDefenseStyleBias(card, attackCard, playstyle);
   }
 
-  private scoreAttackFit(card: AttackCardDef, distanceTier: DistanceTier, holder: TeamRosterPlayer) {
+  private scoreAttackFit(card: AttackCardDef, distanceTier: DistanceTier, holder: TeamRosterPlayer, playstyle: MatchPlaystyleId = "CONTROL") {
+    const pressure = this.state.pressure[holder.teamId];
     if (card.kind === "SHOT") {
-      return distanceTier === "CLOSE" ? 30 + card.shootingBoost : distanceTier === "MID" ? 18 + card.shootingBoost : 8 + card.shootingBoost;
+      return (
+        (distanceTier === "CLOSE" ? 30 + card.shootingBoost : distanceTier === "MID" ? 18 + card.shootingBoost : 8 + card.shootingBoost) +
+        pressure * 0.25 +
+        this.getAttackStyleBias(card, playstyle, holder, distanceTier)
+      );
     }
     if (card.kind === "DRIBBLE") {
-      return holder.skillStars * 3 + card.flair + (distanceTier === "LONG" ? 3 : 1);
+      return holder.skillStars * 3 + card.flair + (distanceTier === "LONG" ? 3 : 1) + this.getAttackStyleBias(card, playstyle, holder, distanceTier);
     }
-    return card.accuracy + card.flair + (distanceTier === "LONG" ? 4 : 2);
+    return card.accuracy + card.flair + (distanceTier === "LONG" ? 4 : 2) + this.getAttackStyleBias(card, playstyle, holder, distanceTier);
+  }
+
+  private getAttackStyleBias(card: AttackCardDef, playstyle: MatchPlaystyleId, holder: TeamRosterPlayer, distanceTier: DistanceTier) {
+    switch (playstyle) {
+      case "DIRECT":
+        if (card.id === "THROUGH_BALL" || card.id === "POWER_SHOT") return 10;
+        if (card.id === "SWITCH_PLAY" || card.id === "CROSS") return 5;
+        return distanceTier === "LONG" && card.kind === "PASS" ? 4 : 0;
+      case "WIDE":
+        if (card.id === "CROSS" || card.id === "OVERLAP_RUN" || card.id === "SWITCH_PLAY") return 10;
+        if (holder.slotId === "LW" || holder.slotId === "RW") return 3;
+        return 0;
+      case "PRESSING":
+        if (card.kind === "DRIBBLE") return 6;
+        if (card.id === "ONE_TWO" || card.id === "THROUGH_BALL") return 5;
+        return 0;
+      case "CONTROL":
+      default:
+        if (card.id === "SHORT_PASS" || card.id === "ONE_TWO" || card.id === "HOLD_UP_PLAY") return 9;
+        return card.kind === "PASS" ? 2 : 0;
+    }
+  }
+
+  private getDefenseStyleBias(card: DefenseCardDef, attackCard: AttackCardDef, playstyle: MatchPlaystyleId) {
+    switch (playstyle) {
+      case "PRESSING":
+        return card.id === "DOUBLE_PRESS" || card.id === "PRESS_TRAP" || card.kind === "TACKLE" ? 7 : 0;
+      case "DIRECT":
+        return attackCard.kind === "PASS" && (card.id === "TRACK_RUNNER" || card.id === "DROP_OFF") ? 5 : 0;
+      case "WIDE":
+        return card.id === "FORCE_WIDE" || card.id === "TRACK_RUNNER" ? 6 : 0;
+      case "CONTROL":
+      default:
+        return card.id === "PROTECT_MIDDLE" || card.id === "SWEEP_COVER" ? 5 : 0;
+    }
+  }
+
+  private getSupportBias(player: TeamRosterPlayer, cardId: string, ballHolder: TeamRosterPlayer, _ballX: number, ballY: number) {
+    if (cardId === "CROSS") {
+      if (player.slotId === "ST") return { x: 3.8, y: ballY < 32 ? 4 : -4 };
+      if (player.slotId === "LW" || player.slotId === "RW") return { x: 2.4, y: player.slotId === "LW" ? -4.2 : 4.2 };
+    }
+    if (cardId === "OVERLAP_RUN") {
+      if (player.slotId === "LB" || player.slotId === "RB") return { x: 4.2, y: player.slotId === "LB" ? -2.4 : 2.4 };
+      if (player.slotId === "LW" || player.slotId === "RW") return { x: 1.5, y: 0 };
+    }
+    if (cardId === "THROUGH_BALL") {
+      if (player.slotId === "ST" || player.slotId === "LW" || player.slotId === "RW") return { x: 4.6, y: 0 };
+    }
+    if (cardId === "HOLD_UP_PLAY") {
+      if (player.slotId === "CM" || player.slotId === "LCM" || player.slotId === "RCM") {
+        return { x: -1.2, y: mix(player.y, ballY, 0.2) - player.y };
+      }
+    }
+    if (cardId === "SWITCH_PLAY") {
+      const onLowSide = ballHolder.y < 32;
+      if (player.slotId === (onLowSide ? "RW" : "LW")) return { x: 3.2, y: onLowSide ? 5.8 : -5.8 };
+    }
+    return { x: 0, y: 0 };
+  }
+
+  private getTargetRunnerBias(cardId: string, player: TeamRosterPlayer, ballHolder: TeamRosterPlayer, currentBallY: number) {
+    if (cardId === "THROUGH_BALL") {
+      return {
+        x: player.slotId === "ST" || player.slotId === "LW" || player.slotId === "RW" ? 4.4 : 1.2,
+        y: player.slotId === "LW" ? -2 : player.slotId === "RW" ? 2 : 0,
+      };
+    }
+    if (cardId === "CROSS") {
+      return {
+        x: player.slotId === "ST" ? 2.6 : 0.8,
+        y: player.slotId === "ST" ? (currentBallY < 32 ? 3.2 : -3.2) : 0,
+      };
+    }
+    if (cardId === "HOLD_UP_PLAY") {
+      return {
+        x: ballHolder.slotId === "ST" ? -2.6 : -1,
+        y: 0,
+      };
+    }
+    if (cardId === "OVERLAP_RUN") {
+      return {
+        x: player.slotId === "LB" || player.slotId === "RB" ? 4 : 1,
+        y: player.slotId === "LB" ? -2.4 : player.slotId === "RB" ? 2.4 : 0,
+      };
+    }
+    return { x: 0, y: 0 };
+  }
+
+  private getPassLead(cardId: string, _player: TeamRosterPlayer, _ballX: number, ballY: number) {
+    if (cardId === "HOLD_UP_PLAY") return { x: -0.6, y: 0.06 };
+    if (cardId === "THROUGH_BALL") return { x: 1.3, y: 0.08 };
+    if (cardId === "CROSS") return { x: 0.8, y: Math.abs(ballY - 32) * 0.008 };
+    return { x: 0, y: 0 };
+  }
+
+  private getDefenseShapeBias(cardId: string, player: TeamRosterPlayer, pressRank: number, currentBallY: number, targetPlayerId?: string) {
+    if (cardId === "FORCE_WIDE") {
+      return { press: -0.05, cover: 0.08, lateral: player.y < currentBallY ? -1.8 : 1.8 };
+    }
+    if (cardId === "PROTECT_MIDDLE") {
+      return { press: -0.08, cover: 0.12, lateral: player.y < 32 ? 1.1 : -1.1 };
+    }
+    if (cardId === "DOUBLE_PRESS") {
+      return { press: pressRank <= 1 ? 0.14 : 0, cover: 0.02, lateral: 0 };
+    }
+    if (cardId === "DROP_OFF") {
+      return { press: -0.12, cover: -0.08, lateral: 0 };
+    }
+    if (cardId === "TRACK_RUNNER" && targetPlayerId) {
+      return { press: pressRank === 0 ? 0.02 : -0.04, cover: 0.06, lateral: player.slotId === "LB" || player.slotId === "LCB" ? -0.4 : 0.4 };
+    }
+    return { press: 0, cover: 0, lateral: 0 };
   }
 
   private getCpuPassTargets(card: AttackCardDef) {
@@ -1327,19 +2161,32 @@ export class CardFootballEngine {
       .filter((player) => player.playerId !== holder.playerId)
       .map((player) => ({
         player,
-        score: this.previewPassChance(card, holder, player, this.measureLaneRisk("AWAY", holder.x, holder.y, player.x, player.y)),
+        score:
+          this.previewPassChance(card, holder, player, this.measureLaneRisk("AWAY", holder.x, holder.y, player.x, player.y)) +
+          this.getCpuTargetBias(card, holder, player),
       }))
       .sort((a, b) => b.score - a.score)
       .map((entry) => entry.player);
   }
 
-  private resolveDribbleChance(
-    card: AttackCardDef,
-    holder: TeamRosterPlayer,
-    targetX: number,
-    targetY: number,
-    defenseCard: DefenseCardDef | null
-  ) {
+  private getCpuTargetBias(card: AttackCardDef, holder: TeamRosterPlayer, target: TeamRosterPlayer) {
+    const forward = this.getAttackDirection("AWAY") === "RIGHT" ? target.x > holder.x : target.x < holder.x;
+    if (card.id === "THROUGH_BALL") {
+      return forward && (target.slotId === "ST" || target.slotId === "LW" || target.slotId === "RW") ? 12 : -4;
+    }
+    if (card.id === "CROSS") {
+      return target.slotId === "ST" || (target.slotId === "LW" && holder.slotId === "RW") || (target.slotId === "RW" && holder.slotId === "LW") ? 10 : -2;
+    }
+    if (card.id === "OVERLAP_RUN") {
+      return (holder.y < 32 && target.y < 32) || (holder.y >= 32 && target.y >= 32) ? 6 : -1;
+    }
+    if (card.id === "HOLD_UP_PLAY") {
+      return target.slotId === "CM" || target.slotId === "LCM" || target.slotId === "RCM" ? 8 : 0;
+    }
+    return 0;
+  }
+
+  private resolveDribbleChance(card: AttackCardDef, holder: TeamRosterPlayer, targetX: number, targetY: number, defenseCard: DefenseCardDef | null) {
     const distanceValue = distance(holder.x, holder.y, targetX, targetY);
     const defendingTeam = holder.teamId === "HOME" ? "AWAY" : "HOME";
     const nearestDefender = this.pickNearestDefender(targetX, targetY, defendingTeam);
@@ -1362,8 +2209,15 @@ export class CardFootballEngine {
     return clamp(Math.round(chance / 2), 4, 95);
   }
 
-  private previewPassChance(card: AttackCardDef, passer: TeamRosterPlayer, target: TeamRosterPlayer, laneRisk: number) {
-    const distanceValue = dist(passer, target);
+  private previewPassChance(
+    card: AttackCardDef,
+    passer: TeamRosterPlayer,
+    target: TeamRosterPlayer,
+    laneRisk: number,
+    fromPoint: { x: number; y: number } = passer,
+    toPoint: { x: number; y: number } = target
+  ) {
+    const distanceValue = distance(fromPoint.x, fromPoint.y, toPoint.x, toPoint.y);
     const idealPenalty =
       distanceValue < card.preferredMinDistance
         ? (card.preferredMinDistance - distanceValue) * 1.8
@@ -1377,21 +2231,325 @@ export class CardFootballEngine {
       card.accuracy * 2.5 +
       card.flair -
       idealPenalty -
-      laneRisk * 100 * 0.48;
+      laneRisk * 100 * 0.48 +
+      this.getPassCardBias(card, passer, target, distanceValue);
     return clamp(Math.round(chance / 2), 5, 95);
   }
 
-  private measureLaneRisk(teamId: TeamId, fromX: number, fromY: number, toX: number, toY: number) {
-    const defenders = this.getTeamPlayers(oppositeTeam(teamId)).filter((player) => player.slotId !== "GK");
-    let risk = 0;
-    for (const defender of defenders) {
-      const proximity = distancePointToSegment(defender.x, defender.y, fromX, fromY, toX, toY);
-      if (proximity > 8) continue;
-      const alongLane = projectionOnSegment(defender.x, defender.y, fromX, fromY, toX, toY);
-      if (alongLane <= 0.08 || alongLane >= 0.92) continue;
-      risk += (1 - proximity / 8) * (defender.blocking / 100) * 0.34;
+  private getPassCardBias(card: AttackCardDef, passer: TeamRosterPlayer, target: TeamRosterPlayer, distanceValue: number) {
+    if (card.id === "THROUGH_BALL") {
+      const forwardRun = this.getAttackDirection(passer.teamId) === "RIGHT" ? target.x > passer.x : target.x < passer.x;
+      return forwardRun && (target.slotId === "ST" || target.slotId === "LW" || target.slotId === "RW") ? 10 : -4;
     }
-    return clamp(risk, 0, 1);
+    if (card.id === "CROSS") {
+      const widePasser = passer.slotId === "LW" || passer.slotId === "RW" || passer.slotId === "LB" || passer.slotId === "RB";
+      return widePasser && (target.slotId === "ST" || target.slotId === "LW" || target.slotId === "RW") ? 9 : -3;
+    }
+    if (card.id === "SWITCH_PLAY") {
+      return Math.abs(target.y - passer.y) > 20 && distanceValue > 18 ? 8 : -2;
+    }
+    if (card.id === "HOLD_UP_PLAY") {
+      return target.slotId === "CM" || target.slotId === "LCM" || target.slotId === "RCM" ? 8 : 0;
+    }
+    if (card.id === "OVERLAP_RUN") {
+      const sameFlank = (passer.y < 32 && target.y < 32) || (passer.y >= 32 && target.y >= 32);
+      return sameFlank && (target.slotId === "LB" || target.slotId === "RB" || target.slotId === "LW" || target.slotId === "RW") ? 7 : -2;
+    }
+    if (card.id === "ONE_TWO") {
+      return distanceValue < 15 ? 6 : -3;
+    }
+    return 0;
+  }
+
+  private simulateMovementPhase(
+    offenseTeam: TeamId,
+    context: {
+      kind: AttackCardKind;
+      ballHolderId: string;
+      targetX: number;
+      targetY: number;
+      targetPlayerId?: string;
+      attackingCard: AttackCardDef;
+      defendingCard: DefenseCardDef;
+    }
+  ): MovementPlan {
+    const positions = new Map<string, { x: number; y: number }>();
+    const ballHolder = this.findPlayer(context.ballHolderId);
+    if (!ballHolder) return { positions };
+    const currentBallX = ballHolder.x;
+    const currentBallY = ballHolder.y;
+
+    for (const teamId of ["HOME", "AWAY"] as TeamId[]) {
+      for (const slotId of SLOT_ORDER) {
+        const player = this.state.teams[teamId].lineup[slotId];
+        const desired = this.getMovementTarget(player, offenseTeam, context, ballHolder, currentBallX, currentBallY);
+        const budget = this.getMovementBudget(player, context.kind, teamId === offenseTeam, player.playerId === ballHolder.playerId);
+        positions.set(player.playerId, moveToward(player, desired, budget));
+      }
+    }
+
+    if (context.kind === "DRIBBLE") {
+      positions.set(ballHolder.playerId, { x: round1(context.targetX), y: round1(context.targetY) });
+    }
+
+    if (context.kind === "PASS" && context.targetPlayerId) {
+      const target = this.findPlayer(context.targetPlayerId);
+      if (target) {
+        const current = positions.get(target.playerId) ?? { x: target.x, y: target.y };
+        positions.set(target.playerId, {
+          x: round1(clamp((current.x + context.targetX) / 2, 2, 98)),
+          y: round1(clamp((current.y + context.targetY) / 2, 4, 60)),
+        });
+      }
+    }
+
+    return { positions };
+  }
+
+  private getMovementTarget(
+    player: TeamRosterPlayer,
+    offenseTeam: TeamId,
+    context: {
+      kind: AttackCardKind;
+      targetX: number;
+      targetY: number;
+      targetPlayerId?: string;
+      attackingCard: AttackCardDef;
+      defendingCard: DefenseCardDef;
+    },
+    ballHolder: TeamRosterPlayer,
+    currentBallX: number,
+    currentBallY: number
+  ) {
+    if (player.role === "GK") {
+      return this.getGoalkeeperTarget(player, offenseTeam, ballHolder, context, currentBallX, currentBallY);
+    }
+
+    const teamTactic = TACTIC_MODIFIERS[this.state.teams[player.teamId].tactic];
+    const teamStyle = this.state.teams[player.teamId].playstyle;
+    const attackDirection = this.getAttackDirection(player.teamId) === "RIGHT" ? 1 : -1;
+    const baseAnchor = this.getShapeAnchor(player, offenseTeam, currentBallX, currentBallY);
+    const lateralBias =
+      player.slotId === "LW" || player.slotId === "LB" || player.slotId === "LCM"
+        ? -1
+        : player.slotId === "RW" || player.slotId === "RB" || player.slotId === "RCM"
+          ? 1
+          : 0;
+    const lineIndex = this.getLineIndex(player.slotId);
+
+    if (player.teamId === offenseTeam) {
+      if (player.playerId === ballHolder.playerId) {
+        if (context.kind === "PASS") {
+          const passLead = this.getPassLead(context.attackingCard.id, player, currentBallX, currentBallY);
+          return {
+            x: player.x + attackDirection * (1.4 + passLead.x),
+            y: player.y + (context.targetY - player.y) * (0.14 + passLead.y),
+          };
+        }
+        if (context.kind === "DRIBBLE") {
+          return { x: context.targetX, y: context.targetY };
+        }
+        return {
+          x: player.x + attackDirection * 2.1,
+          y: player.y + (32 - player.y) * 0.16,
+        };
+      }
+
+      if (context.targetPlayerId && player.playerId === context.targetPlayerId) {
+        const runnerBias = this.getTargetRunnerBias(context.attackingCard.id, player, ballHolder, currentBallY);
+        const receiveX = mix(baseAnchor.x, context.targetX + attackDirection * (lineIndex >= 2 ? 1.8 : 1) + runnerBias.x, 0.48);
+        const receiveY = mix(baseAnchor.y, context.targetY + lateralBias * 1.5 + runnerBias.y, 0.2);
+        return {
+          x: round1(clamp(receiveX, 2, 98)),
+          y: round1(clamp(receiveY, 4, 60)),
+        };
+      }
+
+      const supportBias = this.getSupportBias(player, context.attackingCard.id, ballHolder, currentBallX, currentBallY);
+      const styleDepth = teamStyle === "DIRECT" ? 1.8 : teamStyle === "WIDE" ? 0.8 : teamStyle === "PRESSING" ? 1.2 : 0.5;
+      const supportPush = lineIndex === 0 ? -0.8 : lineIndex === 1 ? 1.4 : 3.2;
+      const supportX = baseAnchor.x + attackDirection * (supportPush + Math.max(0, teamTactic.depth) * 0.12 + styleDepth + supportBias.x);
+      const supportY = mix(baseAnchor.y, currentBallY, 0.06) + lateralBias * (2.2 + teamTactic.width * 0.1) + supportBias.y;
+      return {
+        x: round1(clamp(supportX, 2, 98)),
+        y: round1(clamp(supportY, 4, 60)),
+      };
+    }
+
+    const pressRank = this.getPressRank(player, currentBallX, currentBallY);
+    const defenseBias = this.getDefenseShapeBias(context.defendingCard.id, player, pressRank, currentBallY, context.targetPlayerId);
+    const pressPull =
+      pressRank === 0
+        ? (context.defendingCard.kind === "TACKLE" ? 0.7 : context.defendingCard.kind === "MAN_MARK" ? 0.54 : 0.46) + defenseBias.press
+        : pressRank === 1
+          ? 0.34 + defenseBias.press * 0.6
+          : 0.14 + defenseBias.press * 0.2;
+    const coverTargetX = mix(baseAnchor.x, currentBallX - attackDirection * (lineIndex === 0 ? 8 : lineIndex === 1 ? 6 : 4), 0.26 + defenseBias.cover);
+    const coverTargetY = mix(baseAnchor.y, currentBallY, pressRank <= 1 ? 0.16 : 0.05 + defenseBias.cover * 0.08);
+    const markBias = context.targetPlayerId && pressRank <= 1 ? (player.y < currentBallY ? 0.7 : -0.7) : lateralBias * -0.6 + defenseBias.lateral;
+    return {
+      x: round1(clamp(mix(coverTargetX, currentBallX, pressPull), 2, 98)),
+      y: round1(clamp(mix(coverTargetY, currentBallY + markBias, pressPull), 4, 60)),
+    };
+  }
+
+  private getMovementBudget(player: TeamRosterPlayer, kind: AttackCardKind, isOffense: boolean, isBallHolder: boolean) {
+    const paceFactor = (player.stats.pac - 40) / 60;
+    let budget = 2.2 + paceFactor * 4.1;
+    if (isOffense) budget += 0.6;
+    if (isBallHolder && kind === "DRIBBLE") budget += 2.8;
+    if (kind === "SHOT") budget -= 0.4;
+    return clamp(round1(budget), 1.6, 8.8);
+  }
+
+  private getGoalkeeperTarget(
+    player: TeamRosterPlayer,
+    offenseTeam: TeamId,
+    ballHolder: TeamRosterPlayer,
+    context: {
+      kind: AttackCardKind;
+      targetX: number;
+      targetY: number;
+    },
+    currentBallX: number,
+    currentBallY: number
+  ) {
+    const template = SLOT_TEMPLATE.GK;
+    const baseX = player.side === "LEFT" ? template.x : PITCH_LENGTH - template.x;
+    const baseY = template.y;
+    const attackDirection = this.getAttackDirection(player.teamId) === "RIGHT" ? 1 : -1;
+    const ownGoalX = attackDirection === 1 ? 0 : 100;
+    const sweepAnchorX = ownGoalX + (currentBallX - ownGoalX) * 0.08;
+    const sweepAnchorY = mix(baseY, currentBallY, 0.16);
+
+    if (player.teamId === offenseTeam && player.playerId === ballHolder.playerId) {
+      if (context.kind === "DRIBBLE") {
+        return {
+          x: round1(clamp(context.targetX, baseX - 6, baseX + 12)),
+          y: round1(clamp(context.targetY, 18, 46)),
+        };
+      }
+
+      return {
+        x: round1(clamp(player.x + attackDirection * 1.2, baseX - 4, baseX + 10)),
+        y: round1(clamp(player.y + (context.targetY - player.y) * 0.18, 18, 46)),
+      };
+    }
+
+    return {
+      x: round1(clamp(mix(player.x, sweepAnchorX, 0.45), baseX - 2, baseX + 6)),
+      y: round1(clamp(mix(player.y, sweepAnchorY, 0.4), 20, 44)),
+    };
+  }
+
+  private getShapeAnchor(player: TeamRosterPlayer, offenseTeam: TeamId, ballX: number, ballY: number) {
+    const template = SLOT_TEMPLATE[player.slotId];
+    const attackDirection = this.getAttackDirection(player.teamId) === "RIGHT" ? 1 : -1;
+    const ownGoalX = attackDirection === 1 ? 0 : 100;
+    const teamTactic = TACTIC_MODIFIERS[this.state.teams[player.teamId].tactic];
+    const playstyle = this.state.teams[player.teamId].playstyle;
+    const baseX = player.side === "LEFT" ? template.x : PITCH_LENGTH - template.x;
+    const centeredY = template.y - 32;
+    const styleWidth = playstyle === "WIDE" ? 4.8 : playstyle === "CONTROL" ? 1.2 : -0.8;
+    const styleDepth = playstyle === "DIRECT" ? 3.2 : playstyle === "PRESSING" ? 1.8 : 0.4;
+    const widthAdjust = centeredY > 0 ? teamTactic.width + styleWidth : -(teamTactic.width + styleWidth);
+    const baseY = template.y + widthAdjust * 0.3;
+    const lineIndex = this.getLineIndex(player.slotId);
+
+    if (player.teamId === offenseTeam) {
+      const ballProgress = attackDirection === 1 ? clamp01(ballX / 100) : clamp01((100 - ballX) / 100);
+      const linePush = (lineIndex === 0 ? 3.2 : lineIndex === 1 ? 7.5 : 12.5) + styleDepth;
+      return {
+        x: round1(clamp(baseX + attackDirection * (ballProgress * (linePush + teamTactic.depth * 0.4)), 2, 98)),
+        y: round1(clamp(baseY + (ballY - baseY) * (lineIndex === 2 ? 0.1 : 0.06), 4, 60)),
+      };
+    }
+
+    const styleDrop = playstyle === "PRESSING" ? 0.05 : playstyle === "CONTROL" ? -0.03 : 0;
+    const lineRatio = (lineIndex === 0 ? 0.54 : lineIndex === 1 ? 0.67 : 0.78) + styleDrop;
+    const coverX = ownGoalX + (ballX - ownGoalX) * lineRatio;
+    return {
+      x: round1(clamp(mix(baseX, coverX, 0.58), 2, 98)),
+      y: round1(clamp(baseY + (ballY - baseY) * (lineIndex === 0 ? 0.06 : 0.1), 4, 60)),
+    };
+  }
+
+  private getLineIndex(slotId: SlotId) {
+    if (slotId === "LB" || slotId === "LCB" || slotId === "RCB" || slotId === "RB") return 0;
+    if (slotId === "LCM" || slotId === "CM" || slotId === "RCM") return 1;
+    return 2;
+  }
+
+  private getPressRank(player: TeamRosterPlayer, ballX: number, ballY: number) {
+    const defenders = this.getTeamPlayers(player.teamId)
+      .filter((candidate) => candidate.slotId !== "GK")
+      .slice()
+      .sort((a, b) => distance(a.x, a.y, ballX, ballY) - distance(b.x, b.y, ballX, ballY));
+    return defenders.findIndex((candidate) => candidate.playerId === player.playerId);
+  }
+
+  private applyMovementPlan(plan: MovementPlan) {
+    for (const teamId of ["HOME", "AWAY"] as TeamId[]) {
+      for (const slotId of SLOT_ORDER) {
+        const player = this.state.teams[teamId].lineup[slotId];
+        const point = plan.positions.get(player.playerId);
+        if (!point) continue;
+        player.x = point.x;
+        player.y = point.y;
+      }
+    }
+  }
+
+  private getMovedPoint(plan: MovementPlan, player: TeamRosterPlayer) {
+    return plan.positions.get(player.playerId) ?? { x: player.x, y: player.y };
+  }
+
+  private getMovedTeamPlayers(teamId: TeamId, plan: MovementPlan) {
+    return this.getTeamPlayers(teamId).map((player) => {
+      const point = this.getMovedPoint(plan, player);
+      return { ...player, x: point.x, y: point.y };
+    });
+  }
+
+  private findPassPressure(teamId: TeamId, fromX: number, fromY: number, toX: number, toY: number, plan: MovementPlan) {
+    const candidates: PressureCandidate[] = [];
+    for (const defender of this.getTeamPlayers(teamId).filter((player) => player.slotId !== "GK")) {
+      const end = this.getMovedPoint(plan, defender);
+      const proximity = Math.min(
+        distancePointToSegment(defender.x, defender.y, fromX, fromY, toX, toY),
+        distancePointToSegment(end.x, end.y, fromX, fromY, toX, toY),
+        distanceSegmentToSegment(defender.x, defender.y, end.x, end.y, fromX, fromY, toX, toY)
+      );
+      const alongLane = projectionOnSegment(end.x, end.y, fromX, fromY, toX, toY);
+      if (proximity > PASS_PRESSURE_RADIUS || alongLane <= 0.1 || alongLane >= 0.9) continue;
+      candidates.push({ player: defender, proximity });
+    }
+    return candidates.sort((a, b) => a.proximity - b.proximity || b.player.blocking - a.player.blocking);
+  }
+
+  private findDribblePressure(teamId: TeamId, fromX: number, fromY: number, toX: number, toY: number, plan: MovementPlan) {
+    const candidates: PressureCandidate[] = [];
+    for (const defender of this.getTeamPlayers(teamId).filter((player) => player.slotId !== "GK")) {
+      const end = this.getMovedPoint(plan, defender);
+      const proximity = Math.min(
+        distance(defender.x, defender.y, toX, toY),
+        distance(end.x, end.y, toX, toY),
+        distanceSegmentToSegment(defender.x, defender.y, end.x, end.y, fromX, fromY, toX, toY)
+      );
+      if (proximity > DRIBBLE_PRESSURE_RADIUS) continue;
+      candidates.push({ player: defender, proximity });
+    }
+    return candidates.sort((a, b) => a.proximity - b.proximity || b.player.blocking - a.player.blocking);
+  }
+
+  private measureLaneRisk(teamId: TeamId, fromX: number, fromY: number, toX: number, toY: number) {
+    const plan: MovementPlan = { positions: new Map() };
+    const pressure = this.findPassPressure(oppositeTeam(teamId), fromX, fromY, toX, toY, plan);
+    return clamp(
+      pressure.reduce((sum, candidate) => sum + (1 - candidate.proximity / PASS_PRESSURE_RADIUS) * (candidate.player.blocking / 100) * PASS_PRESSURE_WEIGHT, 0),
+      0,
+      1
+    );
   }
 
   private distanceToShotLane(player: TeamRosterPlayer, shooter: TeamRosterPlayer) {
@@ -1404,18 +2562,6 @@ export class CardFootballEngine {
       .filter((player) => player.slotId !== "GK")
       .slice()
       .sort((a, b) => distance(a.x, a.y, x, y) - distance(b.x, b.y, x, y))[0];
-  }
-
-  private pickInterceptor(targetX: number, targetY: number, teamId: TeamId) {
-    const candidates = this.getTeamPlayers(teamId).filter((player) => player.slotId !== "GK");
-    return (
-      candidates
-        .slice()
-        .sort(
-          (a, b) =>
-            distance(a.x, a.y, targetX, targetY) - a.blocking * 0.08 - (distance(b.x, b.y, targetX, targetY) - b.blocking * 0.08)
-        )[0] ?? this.state.teams[teamId].lineup.CM
-    );
   }
 
   private pickCpuDribbleTarget(holder: TeamRosterPlayer, card: AttackCardDef) {
@@ -1431,10 +2577,23 @@ export class CardFootballEngine {
       }))
       .map((point) => ({
         ...point,
-        score: this.resolveDribbleChance(card, holder, point.x, point.y, null),
+        score: this.resolveDribbleChance(card, holder, point.x, point.y, null) + this.getCpuDribbleBias(card, holder, point.x, point.y),
       }))
       .sort((a, b) => b.score - a.score);
     return candidates[0];
+  }
+
+  private getCpuDribbleBias(card: AttackCardDef, holder: TeamRosterPlayer, x: number, y: number) {
+    if (card.id === "CUT_INSIDE") {
+      return 8 - Math.abs(y - 32);
+    }
+    if (card.id === "BURST_RUN") {
+      return this.getAttackDirection("AWAY") === "RIGHT" ? x - holder.x : holder.x - x;
+    }
+    if (card.id === "BODY_FEINT") {
+      return 5 - Math.abs(y - holder.y);
+    }
+    return 0;
   }
 
   private getDistanceTier(player: TeamRosterPlayer): DistanceTier {
@@ -1505,6 +2664,134 @@ export class CardFootballEngine {
     }
   }
 
+  private syncBallHolderState() {
+    for (const teamId of ["HOME", "AWAY"] as TeamId[]) {
+      for (const slotId of SLOT_ORDER) {
+        this.state.teams[teamId].lineup[slotId].hasBall = false;
+      }
+    }
+
+    const holder = this.findPlayer(this.state.ball.holderId);
+    if (!holder) {
+      return;
+    }
+
+    holder.hasBall = true;
+    holder.x = round1(this.state.ball.x);
+    holder.y = round1(this.state.ball.y);
+  }
+
+  private projectLoosePassPoint(fromX: number, fromY: number, toX: number, toY: number) {
+    const dx = toX - fromX;
+    const dy = toY - fromY;
+    const length = Math.hypot(dx, dy) || 1;
+    const overshoot = Math.min(4.5, Math.max(1.5, length * 0.16));
+    return {
+      x: round1(clamp(toX + (dx / length) * overshoot, 2, 98)),
+      y: round1(clamp(toY + (dy / length) * overshoot, 4, 60)),
+    };
+  }
+
+  private pickLooseBallWinner(x: number, y: number, favoredTeam: TeamId | null = null) {
+    return this.getPitchPlayers()
+      .map((player) => this.findPlayer(player.playerId)!)
+      .slice()
+      .sort((a, b) => this.looseBallRecoveryScore(a, x, y, favoredTeam) - this.looseBallRecoveryScore(b, x, y, favoredTeam))[0];
+  }
+
+  private looseBallRecoveryScore(player: TeamRosterPlayer, x: number, y: number, favoredTeam: TeamId | null) {
+    let score = distance(player.x, player.y, x, y) - player.stats.pac * 0.025 - player.agility * 0.01;
+    if (favoredTeam && player.teamId === favoredTeam) score -= 1.1;
+    if (player.slotId === "GK") score += 3;
+    return score;
+  }
+
+  private placeBallWithPlayer(player: TeamRosterPlayer, x: number, y: number) {
+    this.state.ball.teamId = player.teamId;
+    this.state.ball.holderId = player.playerId;
+    this.state.ball.x = round1(clamp(x, 2, 98));
+    this.state.ball.y = round1(clamp(y, 4, 60));
+    player.x = this.state.ball.x;
+    player.y = this.state.ball.y;
+    this.syncBallHolderState();
+  }
+
+  private setRestart(type: MatchRestartType, teamId: TeamId, label: string, x: number, y: number, preferredSlots: SlotId[]) {
+    const taker = this.pickRestartTaker(teamId, preferredSlots, x, y);
+    this.state.restart = { type, teamId, label, x: round1(clamp(x, 2, 98)), y: round1(clamp(y, 4, 60)) };
+    this.placeBallWithPlayer(taker, x, y);
+  }
+
+  private pickRestartTaker(teamId: TeamId, preferredSlots: SlotId[], x: number, y: number) {
+    const preferred = preferredSlots.map((slotId) => this.state.teams[teamId].lineup[slotId]).filter(Boolean);
+    const pool = preferred.length > 0 ? preferred : this.getTeamPlayers(teamId);
+    return pool.slice().sort((a, b) => distance(a.x, a.y, x, y) - distance(b.x, b.y, x, y))[0];
+  }
+
+  private raisePressure(teamId: TeamId, amount: number) {
+    this.state.pressure[teamId] = clamp(Math.round(this.state.pressure[teamId] + amount), 0, 100);
+    const otherTeam = oppositeTeam(teamId);
+    this.state.pressure[otherTeam] = clamp(Math.round(this.state.pressure[otherTeam] - amount * 0.45), 0, 100);
+  }
+
+  private resetPressure() {
+    this.state.pressure.HOME = 0;
+    this.state.pressure.AWAY = 0;
+  }
+
+  private getPassPressureGain(attackingCard: AttackCardDef, from: { x: number; y: number }, to: { x: number; y: number }) {
+    const distanceValue = distance(from.x, from.y, to.x, to.y);
+    if (attackingCard.id === "THROUGH_BALL") return 13;
+    if (attackingCard.id === "CROSS") return 12;
+    if (attackingCard.id === "OVERLAP_RUN") return 11;
+    return distanceValue > 18 ? 9 : 6;
+  }
+
+  private getDribblePressureGain(attackingCard: AttackCardDef, movedHolder: { x: number; y: number }, holder: TeamRosterPlayer) {
+    const progress = this.getAttackDirection(holder.teamId) === "RIGHT" ? movedHolder.x - holder.x : holder.x - movedHolder.x;
+    return clamp(Math.round(7 + progress * 0.8 + attackingCard.flair * 0.4), 5, 16);
+  }
+
+  private shouldAwardAttackingThrowIn(attackingCard: AttackCardDef, movedTarget: { x: number; y: number }, proximity: number) {
+    return (attackingCard.id === "SWITCH_PLAY" || attackingCard.id === "CROSS" || attackingCard.id === "OVERLAP_RUN") && this.isNearTouchline(movedTarget.y) && proximity < 1.35;
+  }
+
+  private isNearTouchline(y: number) {
+    return y < 8 || y > 56;
+  }
+
+  private getTouchlineRestartPoint(x: number, y: number) {
+    return {
+      x: round1(clamp(x, 4, 96)),
+      y: y < 32 ? 4 : 60,
+    };
+  }
+
+  private getCornerPoint(teamId: TeamId, y: number) {
+    const attackDirection = this.getAttackDirection(teamId);
+    return {
+      x: attackDirection === "RIGHT" ? 100 : 0,
+      y: y < 32 ? 4 : 60,
+    };
+  }
+
+  private shouldAwardCorner(teamId: TeamId, point: { x: number; y: number }) {
+    const attackDirection = this.getAttackDirection(teamId);
+    return attackDirection === "RIGHT" ? point.x > 92 : point.x < 8;
+  }
+
+  private getThrowInSlots(y: number): SlotId[] {
+    return y < 32 ? ["LB", "LW", "LCM"] : ["RB", "RW", "RCM"];
+  }
+
+  private isCleanTackleWindow(pressure: PressureCandidate, defendingCard: DefenseCardDef) {
+    return pressure.proximity < 1.3 || defendingCard.id === "DOUBLE_PRESS" || defendingCard.kind === "TACKLE";
+  }
+
+  private randomBetween(min: number, max: number) {
+    return min + this.rng.next() * (max - min);
+  }
+
   private getPitchPlayers(): PitchPlayerView[] {
     return (["HOME", "AWAY"] as TeamId[]).flatMap((teamId) => SLOT_ORDER.map((slotId) => this.toPitchPlayer(this.state.teams[teamId].lineup[slotId])));
   }
@@ -1532,17 +2819,6 @@ export class CardFootballEngine {
       }
     }
     return null;
-  }
-
-  private mutateLineupPlayer(playerId: string, updater: (player: TeamRosterPlayer) => void) {
-    for (const teamId of ["HOME", "AWAY"] as TeamId[]) {
-      for (const slotId of SLOT_ORDER) {
-        const player = this.state.teams[teamId].lineup[slotId];
-        if (player.playerId !== playerId) continue;
-        updater(player);
-        return;
-      }
-    }
   }
 
   private getCard(cardId: string) {
@@ -1623,7 +2899,7 @@ function getDefenseCard(cardId: string) {
   return card;
 }
 
-function buildTeamRoster(teamId: TeamId, label: string, side: SideId, rawPlayers: RawCollectionPlayer[]): TeamRosterState {
+function buildTeamRoster(teamId: TeamId, label: string, side: SideId, rawPlayers: RawCollectionPlayer[], playstyle: MatchPlaystyleId): TeamRosterState {
   const available = rawPlayers.map((player, index) => ({ ...player, uniqueKey: `${teamId}_${player.id}_${index}` }));
   const lineup = {} as Record<SlotId, TeamRosterPlayer>;
   for (const slotId of SLOT_ORDER) {
@@ -1637,7 +2913,8 @@ function buildTeamRoster(teamId: TeamId, label: string, side: SideId, rawPlayers
     label,
     lineup,
     bench,
-    tactic: teamId === "HOME" ? "BALANCED" : "WING_PLAY",
+    tactic: teamId === "HOME" ? "BALANCED" : playstyle === "WIDE" ? "WING_PLAY" : playstyle === "DIRECT" ? "DIRECT" : "BALANCED",
+    playstyle,
     substitutionsUsed: 0,
     decks: {
       attackDraw: shuffleArray(ATTACK_DECK_TEMPLATE),
@@ -1646,6 +2923,14 @@ function buildTeamRoster(teamId: TeamId, label: string, side: SideId, rawPlayers
       defenseDiscard: [],
     },
   };
+}
+
+function buildCpuPlayerPool(rawPlayers: RawCollectionPlayer[]) {
+  return rawPlayers.map((player, index) => ({
+    ...player,
+    id: `CPU_${player.id}_${index + 1}`,
+    name: CPU_NAMES[index % CPU_NAMES.length],
+  }));
 }
 
 function createRosterPlayer(
@@ -1768,6 +3053,10 @@ function clamp01(value: number) {
   return clamp(value, 0, 1);
 }
 
+function mix(from: number, to: number, amount: number) {
+  return from + (to - from) * amount;
+}
+
 function dist(a: { x: number; y: number }, b: { x: number; y: number }) {
   return distance(a.x, a.y, b.x, b.y);
 }
@@ -1818,4 +3107,39 @@ function projectionOnSegment(px: number, py: number, ax: number, ay: number, bx:
 
 function round1(value: number) {
   return Math.round(value * 10) / 10;
+}
+
+function moveToward(from: { x: number; y: number }, to: { x: number; y: number }, maxDistance: number) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length <= maxDistance || length < 0.0001) {
+    return {
+      x: round1(clamp(to.x, 2, 98)),
+      y: round1(clamp(to.y, 4, 60)),
+    };
+  }
+  const scale = maxDistance / length;
+  return {
+    x: round1(clamp(from.x + dx * scale, 2, 98)),
+    y: round1(clamp(from.y + dy * scale, 4, 60)),
+  };
+}
+
+function distanceSegmentToSegment(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+  cx: number,
+  cy: number,
+  dx: number,
+  dy: number
+) {
+  return Math.min(
+    distancePointToSegment(ax, ay, cx, cy, dx, dy),
+    distancePointToSegment(bx, by, cx, cy, dx, dy),
+    distancePointToSegment(cx, cy, ax, ay, bx, by),
+    distancePointToSegment(dx, dy, ax, ay, bx, by)
+  );
 }
