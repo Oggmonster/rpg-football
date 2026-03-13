@@ -40,11 +40,12 @@ export class DeckBuilderScene extends Phaser.Scene {
     this.attackCounts = countByType(profile.attackDeckIds.map((id) => attackMap.get(id)).filter(Boolean) as CardDef[]);
     this.defenseCounts = countByType(profile.defenseDeckIds.map((id) => defenseMap.get(id)).filter(Boolean) as CardDef[]);
 
-    this.add.text(30, 24, "Deck Builder", { fontFamily: "monospace", fontSize: "28px", color: "#f0fff6" });
-    this.add.text(30, 56, "Use starter presets for tactical identity and tweak card type ratios.", {
+    this.add.text(30, 24, "Command Lab", { fontFamily: "Georgia", fontSize: "30px", color: "#f0fff6", fontStyle: "bold" });
+    this.add.text(30, 56, "Team command loadout is live in the turn-based football match. Legacy attack/defense ratios are still parked for a later reconnect.", {
       fontFamily: "monospace",
       fontSize: "12px",
       color: "#b5efd6",
+      wordWrap: { width: 640 },
     });
 
     this.drawSection("Attack Deck", 40, this.attackCounts, ATTACK_DECK_CONSTRAINTS.byType);

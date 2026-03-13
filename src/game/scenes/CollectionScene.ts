@@ -14,8 +14,8 @@ export class CollectionScene extends Phaser.Scene {
     const profile = loadProfile();
     this.selected = new Set(profile.squadIds);
 
-    this.add.text(24, 18, "Player Collection", { fontFamily: "monospace", fontSize: "28px", color: "#f0fff6" });
-    this.add.text(24, 48, "Archetypes, traits, growth caps", {
+    this.add.text(24, 18, "Roster Room", { fontFamily: "Georgia", fontSize: "30px", color: "#f0fff6", fontStyle: "bold" });
+    this.add.text(24, 48, "Your selected squad now drives the home offense/defense ratings in the turn-based football match.", {
       fontFamily: "monospace",
       fontSize: "13px",
       color: "#b4efd6",

@@ -1,1159 +1,556 @@
-﻿import Phaser from "phaser";
-import attackCards from "../../data/cards.attack.json";
-import defenseCards from "../../data/cards.defense.json";
-import { HAND_SIZE } from "../../sim/config/MatchConfig";
+import Phaser from "phaser";
+import type { TeamCommandType } from "../../sim/state/MatchState";
 import {
-  GOAL_LINE_LEFT_X,
-  GOAL_LINE_RIGHT_X,
-  PITCH_CENTER_Y,
-  PENALTY_BOX_DEPTH,
-  PENALTY_BOX_HEIGHT,
-  PITCH_HEIGHT,
-  PITCH_LEFT,
-  PITCH_TOP,
-  PITCH_WIDTH,
-  WORLD_HEIGHT,
-  WORLD_WIDTH,
-} from "../../sim/config/PitchConfig";
-import { MAX_SIM_STEPS_PER_FRAME, SIM_TICK_MS } from "../../sim/config/SimulationConfig";
-import type { CardDef } from "../../sim/cards/types";
-import type { SimEvent } from "../../sim/events/SimEvent";
-import type { TeamId } from "../../sim/state/MatchState";
-import { MatchSim } from "../../sim/MatchSim";
-import { commentaryFromEvent } from "../commentary/CommentaryMapper";
-import { CommentaryQueue, type CommentaryLine } from "../commentary/CommentaryQueue";
-import { eventById } from "../events/EventCatalog";
-import { applyMatchProgression, type MatchProgressSummary } from "../progression/ProgressionSystem";
-import { getCardCatalogByDeckIds, getSelectedSquadPlayers, loadProfile, updateCollectionAndManager } from "../profile/ProfileStore";
-import { ActivePlayerPanel } from "../ui/ActivePlayerPanel";
-import { HandView, type HandCardUiState } from "../ui/HandView";
-import { Hud } from "../ui/Hud";
-import { PerfOverlay } from "../ui/PerfOverlay";
-import { TacticalPauseOverlay } from "../ui/TacticalPauseOverlay";
-import { MatchView } from "../view/MatchView";
+  buildAwayRatings,
+  buildHomeRatings,
+  DriveMatchEngine,
+  type Lane,
+  type PlayResult,
+  type TargetOption,
+  type TokenId,
+} from "../drive/DriveMatchEngine";
+import { getSelectedSquadPlayers, loadProfile } from "../profile/ProfileStore";
 
-type CatalogJson = { cards: CardDef[] };
-const AIM_WINDOW_MS = 5000;
-const AIM_SLOWMO_FACTOR = 0.22;
-const AIM_LINE_LENGTH_PX = 165;
-const POWER_HOLD_MAX_MS = 900;
-const AIM_CARD_TYPES = new Set<CardDef["type"]>(["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS", "SHOOT", "RUSH", "DRIBBLE"]);
-const POWER_AFFECTED_CARD_TYPES = new Set<CardDef["type"]>(["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS", "SHOOT"]);
-const HAND_HOTKEYS = ["A", "S", "D"] as const;
-type HandHotkey = (typeof HAND_HOTKEYS)[number];
-type AimConfirmMode = "pointer" | "hotkey";
-const ATTACK_LANE_PREFS: Record<HandHotkey, CardDef["type"][]> = {
-  A: ["RUSH", "DRIBBLE"],
-  S: ["SHOOT"],
-  D: ["PASS", "CROSS", "THROUGH_PASS", "LONG_BALL"],
+type CardButton = {
+  bg: Phaser.GameObjects.Rectangle;
+  accent: Phaser.GameObjects.Rectangle;
+  hotkey: Phaser.GameObjects.Text;
+  title: Phaser.GameObjects.Text;
+  meta: Phaser.GameObjects.Text;
+  body: Phaser.GameObjects.Text;
+  cardId: string | null;
 };
-const DEFENSE_LANE_PREFS: Record<HandHotkey, CardDef["type"][]> = {
-  A: ["PRESS", "COVER"],
-  S: ["TACKLE"],
-  D: ["INTERCEPT", "COVER", "PRESS"],
+
+type CommandButton = {
+  bg: Phaser.GameObjects.Rectangle;
+  title: Phaser.GameObjects.Text;
+  body: Phaser.GameObjects.Text;
+  commandId: TeamCommandType;
+};
+
+type TokenView = {
+  key: string;
+  body: Phaser.GameObjects.Arc;
+  ring: Phaser.GameObjects.Arc;
+  label: Phaser.GameObjects.Text;
+  role: Phaser.GameObjects.Text;
+  teamId: "HOME" | "AWAY";
+  tokenId: TokenId;
+};
+
+const BG = 0x08131c;
+const PANEL = 0x102332;
+const PANEL_ALT = 0x132b3d;
+const CREAM = "#f7f1db";
+const TEAL = 0x67d9d3;
+const CORAL = 0xf08d6d;
+const FIELD_LEFT = 184;
+const FIELD_TOP = 116;
+const FIELD_WIDTH = 548;
+const FIELD_HEIGHT = 252;
+const FIELD_RIGHT = FIELD_LEFT + FIELD_WIDTH;
+const FIELD_BOTTOM = FIELD_TOP + FIELD_HEIGHT;
+const LANE_Y: Record<Lane, number> = {
+  LEFT: FIELD_TOP + 54,
+  CENTER: FIELD_TOP + FIELD_HEIGHT / 2,
+  RIGHT: FIELD_BOTTOM - 54,
 };
 
 export class MatchScene extends Phaser.Scene {
-  private sim!: MatchSim;
-  private handView!: HandView;
-  private activePlayerPanel!: ActivePlayerPanel;
-  private hud!: Hud;
-  private perf!: PerfOverlay;
-  private matchView!: MatchView;
-  private pitchGfx!: Phaser.GameObjects.Graphics;
-  private aimGfx!: Phaser.GameObjects.Graphics;
-  private feedbackText!: Phaser.GameObjects.Text;
-  private announceText!: Phaser.GameObjects.Text;
-  private aimHintText!: Phaser.GameObjects.Text;
+  private engine!: DriveMatchEngine;
+  private fieldGfx!: Phaser.GameObjects.Graphics;
+  private scoreText!: Phaser.GameObjects.Text;
+  private clockText!: Phaser.GameObjects.Text;
+  private phaseText!: Phaser.GameObjects.Text;
+  private resolutionText!: Phaser.GameObjects.Text;
+  private selectionText!: Phaser.GameObjects.Text;
+  private commentaryText!: Phaser.GameObjects.Text;
+  private momentumFill!: Phaser.GameObjects.Rectangle;
+  private attackBandMarker!: Phaser.GameObjects.Rectangle;
+  private ballMarker!: Phaser.GameObjects.Arc;
+  private tokenViews = new Map<string, TokenView>();
+  private handButtons: CardButton[] = [];
+  private commandButtons: CommandButton[] = [];
+  private historyLines: Phaser.GameObjects.Text[] = [];
+  private selectedCommandId: TeamCommandType | null = null;
+  private pendingCardId: string | null = null;
+  private targetOptions: TargetOption[] = [];
+  private activeLane: Lane = "CENTER";
   private postMatchBg!: Phaser.GameObjects.Rectangle;
   private postMatchText!: Phaser.GameObjects.Text;
   private postMatchHint!: Phaser.GameObjects.Text;
-  private commentaryBg!: Phaser.GameObjects.Rectangle;
-  private commentaryAccent!: Phaser.GameObjects.Rectangle;
-  private commentaryText!: Phaser.GameObjects.Text;
-  private cardDebugText!: Phaser.GameObjects.Text;
-  private simAccumulatorMs = 0;
-  private feedbackUntilMs = 0;
-  private overlayVisible = false;
-  private tacticalPause = false;
-  private aiDebugVisible = false;
-  private tacticalOverlay!: TacticalPauseOverlay;
-  private helpText!: Phaser.GameObjects.Text;
-  private selectedCardId: string | null = null;
-  private selectedCardUntilMs = 0;
-  private pendingAimCardId: string | null = null;
-  private aimOrigin: { x: number; y: number } | null = null;
-  private aimTarget: { x: number; y: number } | null = null;
-  private aimUntilMs = 0;
-  private aimDragActive = false;
-  private aimConfirmMode: AimConfirmMode | null = null;
-  private hotkeyHeld = new Set<HandHotkey>();
-  private hotkeyHoldStartedAtMs = new Map<HandHotkey, number>();
-  private hotkeyCardByKey = new Map<HandHotkey, string>();
-  private hotkeyDisplayCardByKey = new Map<HandHotkey, string>();
-  private hotkeyAimKey: HandHotkey | null = null;
-  private cardTypeById = new Map<string, CardDef["type"]>();
-  private cardNameById = new Map<string, string>();
-  private cardPowerById = new Map<string, number>();
-  private commentaryQueue = new CommentaryQueue();
-  private lastPhase = "";
-  private squadIdsForProgression: string[] = [];
-  private postMatchApplied = false;
 
   constructor() {
     super("MatchScene");
   }
 
   create() {
-    this.postMatchApplied = false;
     const profile = loadProfile();
-    const activeEvent = eventById(profile.manager.activeEventId);
-    this.squadIdsForProgression = [...profile.squadIds];
-    const selectedAttack = getCardCatalogByDeckIds(profile.attackDeckIds, "ATTACK");
-    const selectedDefense = getCardCatalogByDeckIds(profile.defenseDeckIds, "DEFENSE");
-    const attackCatalog = (selectedAttack.cards.length === 15 ? selectedAttack : attackCards) as CatalogJson;
-    const defenseCatalog = (selectedDefense.cards.length === 15 ? selectedDefense : defenseCards) as CatalogJson;
-    this.cardTypeById.clear();
-    this.cardNameById.clear();
-    this.cardPowerById.clear();
-    for (const card of attackCatalog.cards) {
-      this.cardTypeById.set(card.id, card.type);
-      this.cardNameById.set(card.id, card.name);
-      this.cardPowerById.set(card.id, this.extractCardPower(card.id));
-    }
-    for (const card of defenseCatalog.cards) {
-      this.cardTypeById.set(card.id, card.type);
-      this.cardNameById.set(card.id, card.name);
-      this.cardPowerById.set(card.id, this.extractCardPower(card.id));
-    }
     const squad = getSelectedSquadPlayers(profile);
+    const homeRatings = buildHomeRatings(squad);
+    const awayRatings = buildAwayRatings(profile.manager.division);
 
-    this.sim = MatchSim.createFromCatalogs({
-      attackCatalog,
-      defenseCatalog,
+    this.engine = new DriveMatchEngine({
       rngSeed: 1337,
-      homeSquad: squad,
-      eventModifiers: activeEvent.gameplay,
+      homeLabel: "Blackflag Union",
+      awayLabel: `Division ${profile.manager.division} CPU`,
+      homeRatings,
+      awayRatings,
+      teamCommands: profile.teamCommandDeckIds.slice(0, 5),
     });
 
-    const sceneH = this.scale.height;
-    const handX = 16;
-    const handY = sceneH - 116;
-    const handWidth = HAND_SIZE * 120 + (HAND_SIZE - 1) * 10;
-    const panelX = handX + handWidth + 18;
-    const panelY = sceneH - 116;
+    this.cameras.main.setBackgroundColor(BG);
+    this.createBackdrop();
+    this.createHud();
+    this.createField();
+    this.createTokens();
+    this.createHand();
+    this.createCommands();
+    this.createPostMatchPanel();
+    this.bindInput();
+    this.refreshUi(null, true);
+  }
 
-    this.pitchGfx = this.add.graphics();
-    this.pitchGfx.setDepth(0);
-    this.drawPitch();
-    this.aimGfx = this.add.graphics();
-    this.aimGfx.setDepth(11);
+  private createBackdrop() {
+    this.add.rectangle(480, 270, 960, 540, 0x07111a, 1);
+    this.add.circle(154, 82, 132, 0x58c0d0, 0.08);
+    this.add.circle(840, 430, 176, 0xffb370, 0.06);
+    this.add.rectangle(480, 32, 920, 52, 0x0b1924, 1).setStrokeStyle(1, 0x2b4658, 0.84);
+    this.add.rectangle(110, 246, 152, 342, PANEL_ALT, 1).setStrokeStyle(1, 0x32536b, 0.82);
+    this.add.rectangle(832, 246, 208, 342, PANEL, 1).setStrokeStyle(1, 0x32536b, 0.82);
+    this.add.rectangle(480, 448, 894, 146, PANEL, 1).setStrokeStyle(1, 0x32536b, 0.82);
+  }
 
-    this.matchView = new MatchView(this, this.sim.getRenderState());
-
-    this.hud = new Hud(this, 20, 20);
-    this.perf = new PerfOverlay(this, 740, 16);
-    this.hud.setDepth(20);
-    this.perf.setDepth(21);
-
-    this.handView = new HandView(this, handX, handY, HAND_SIZE, (cardId) => {
-      try {
-        this.selectedCardId = cardId;
-        if (this.shouldUseDragAim(cardId)) {
-          this.beginAimMode(cardId);
-          return;
-        }
-        this.selectedCardUntilMs = this.time.now + 900;
-        this.tryPlayCard(cardId, this.buildCardInput());
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        console.error("[MatchScene] card play failed", error);
-        this.showFeedback(`Card error: ${msg}`);
-      }
+  private createHud() {
+    this.add.text(36, 16, "Pocket Gaffer Tactics", {
+      fontFamily: "Georgia",
+      fontSize: "28px",
+      color: CREAM,
+      fontStyle: "bold",
     });
-    this.handView.setDepth(40);
+    this.scoreText = this.add.text(314, 16, "", {
+      fontFamily: "Georgia",
+      fontSize: "28px",
+      color: CREAM,
+      fontStyle: "bold",
+    });
+    this.clockText = this.add.text(314, 48, "", {
+      fontFamily: "monospace",
+      fontSize: "12px",
+      color: "#d2e6ee",
+    });
+    this.phaseText = this.add.text(36, 82, "", {
+      fontFamily: "Georgia",
+      fontSize: "22px",
+      color: CREAM,
+      fontStyle: "italic",
+    });
+    this.selectionText = this.add.text(36, 116, "", {
+      fontFamily: "monospace",
+      fontSize: "13px",
+      color: "#ffd2a1",
+      wordWrap: { width: 128 },
+    });
+    this.resolutionText = this.add.text(770, 84, "", {
+      fontFamily: "monospace",
+      fontSize: "12px",
+      color: "#d5e5ee",
+      wordWrap: { width: 150 },
+    });
+    this.commentaryText = this.add.text(770, 320, "", {
+      fontFamily: "monospace",
+      fontSize: "11px",
+      color: "#c6dbe8",
+      wordWrap: { width: 170 },
+    });
+    this.add.text(742, 18, "Momentum", {
+      fontFamily: "monospace",
+      fontSize: "11px",
+      color: "#a7d9d2",
+    });
+    this.add.rectangle(824, 40, 192, 14, 0x09131a, 1).setStrokeStyle(1, 0x35566c, 0.82);
+    this.momentumFill = this.add.rectangle(824, 40, 6, 10, TEAL, 1).setOrigin(0.5);
+    this.add.text(770, 212, "Commands", {
+      fontFamily: "Georgia",
+      fontSize: "20px",
+      color: CREAM,
+      fontStyle: "bold",
+    });
+    this.add.text(770, 432, "Recent Rounds", {
+      fontFamily: "Georgia",
+      fontSize: "20px",
+      color: CREAM,
+      fontStyle: "bold",
+    });
 
-    this.activePlayerPanel = new ActivePlayerPanel(this, panelX, panelY);
-    this.activePlayerPanel.setDepth(40);
+    for (let i = 0; i < 4; i++) {
+      this.historyLines.push(
+        this.add.text(770, 462 + i * 18, "", {
+          fontFamily: "monospace",
+          fontSize: "11px",
+          color: "#c4dcea",
+          wordWrap: { width: 170 },
+        })
+      );
+    }
+  }
 
-    this.tacticalOverlay = new TacticalPauseOverlay(this, this.scale.width - 356, 58);
-    this.tacticalOverlay.setDepth(55);
+  private createField() {
+    this.fieldGfx = this.add.graphics();
+    this.drawField();
+    this.attackBandMarker = this.add.rectangle(FIELD_RIGHT - 78, FIELD_TOP + FIELD_HEIGHT / 2, 2, FIELD_HEIGHT + 16, 0xf0c36b, 0.78);
+    this.ballMarker = this.add.circle(FIELD_LEFT, LANE_Y.CENTER, 8, 0x09131a, 1).setStrokeStyle(4, 0xf7f1db, 1);
+  }
 
-    this.feedbackText = this.add
-      .text(16, 532, "", {
+  private createTokens() {
+    const tokens = this.engine.getBoardTokens();
+    for (const token of tokens) {
+      const body = this.add.circle(0, 0, 12, token.teamId === "HOME" ? TEAL : CORAL, 1).setInteractive({ useHandCursor: true });
+      const ring = this.add.circle(0, 0, 16, 0xf0c36b, 0.12).setStrokeStyle(2, 0xf0c36b, 0.6);
+      const label = this.add.text(0, 0, token.roleLabel, {
         fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#fff2bc",
-      })
-      .setDepth(42);
-
-    this.announceText = this.add
-      .text(this.scale.width / 2, 78, "", {
+        fontSize: "10px",
+        color: token.teamId === "HOME" ? "#08303a" : "#3a120b",
+      }).setOrigin(0.5);
+      const role = this.add.text(0, 0, token.roleLabel, {
         fontFamily: "monospace",
+        fontSize: "9px",
+        color: "#f6f4ea",
+      }).setOrigin(0.5);
+      const key = `${token.teamId}_${token.id}`;
+      body.on("pointerdown", () => {
+        if (token.teamId !== "HOME") return;
+        if (!this.pendingCardId) return;
+        if (!this.targetOptions.some((option) => option.id === token.id)) return;
+        this.resolvePendingCard(token.id);
+      });
+      this.tokenViews.set(key, { key, body, ring, label, role, teamId: token.teamId, tokenId: token.id });
+    }
+  }
+
+  private createHand() {
+    for (let i = 0; i < 4; i++) {
+      const x = 176 + i * 176;
+      const y = 388;
+      const bg = this.add
+        .rectangle(x, y, 164, 106, 0x182d3e, 1)
+        .setOrigin(0, 0)
+        .setStrokeStyle(2, 0x3b647f, 0.88)
+        .setInteractive({ useHandCursor: true });
+      const accent = this.add.rectangle(x, y, 164, 10, TEAL, 1).setOrigin(0, 0);
+      const hotkey = this.add.text(x + 10, y + 14, `${i + 1}`, {
+        fontFamily: "Georgia",
+        fontSize: "20px",
+        color: CREAM,
+        fontStyle: "bold",
+      });
+      const title = this.add.text(x + 38, y + 16, "", {
+        fontFamily: "Georgia",
         fontSize: "18px",
-        color: "#fff2bc",
-      })
-      .setOrigin(0.5, 0.5)
-      .setDepth(45)
-      .setScrollFactor(0)
-      .setAlpha(0);
-    this.aimHintText = this.add
-      .text(this.scale.width / 2, 100, "", {
+        color: CREAM,
+        fontStyle: "bold",
+      });
+      const meta = this.add.text(x + 10, y + 44, "", {
         fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#c7f6ff",
-      })
-      .setOrigin(0.5, 0.5)
-      .setDepth(45)
-      .setScrollFactor(0)
-      .setVisible(false);
-
-    this.commentaryBg = this.add
-      .rectangle(this.scale.width / 2, 112, 360, 26, 0x07140f, 0.86)
-      .setStrokeStyle(1, 0x8bcfb5, 0.9)
-      .setDepth(46)
-      .setScrollFactor(0)
-      .setVisible(false);
-    this.commentaryAccent = this.add
-      .rectangle(this.scale.width / 2 - 176, 112, 6, 24, 0x79beff, 1)
-      .setDepth(47)
-      .setScrollFactor(0)
-      .setVisible(false);
-    this.commentaryText = this.add
-      .text(this.scale.width / 2 - 166, 112, "", {
+        fontSize: "11px",
+        color: "#97e3d9",
+      });
+      const body = this.add.text(x + 10, y + 62, "", {
         fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#e6fff4",
-      })
-      .setOrigin(0, 0.5)
-      .setDepth(47)
-      .setScrollFactor(0)
-      .setVisible(false);
+        fontSize: "11px",
+        color: "#d8e7ef",
+        wordWrap: { width: 144 },
+      });
+      const index = i;
+      bg.on("pointerdown", () => {
+        const cardId = this.handButtons[index]?.cardId;
+        if (cardId) this.onCardPicked(cardId);
+      });
+      this.handButtons.push({ bg, accent, hotkey, title, meta, body, cardId: null });
+    }
+  }
 
-    this.postMatchBg = this.add
-      .rectangle(this.scale.width / 2, this.scale.height / 2, 560, 260, 0x091712, 0.94)
-      .setStrokeStyle(2, 0xb7ffe3, 0.9)
-      .setDepth(70)
-      .setScrollFactor(0)
-      .setVisible(false);
+  private createCommands() {
+    this.engine.getCommandStates().forEach((command, index) => {
+      const y = 244 + index * 32;
+      const bg = this.add
+        .rectangle(770, y, 170, 26, 0x162636, 1)
+        .setOrigin(0, 0)
+        .setStrokeStyle(1, 0x35566d, 0.88)
+        .setInteractive({ useHandCursor: true });
+      const title = this.add.text(778, y + 5, command.label, {
+        fontFamily: "monospace",
+        fontSize: "10px",
+        color: "#edf5e2",
+      });
+      const body = this.add.text(932, y + 5, "Ready", {
+        fontFamily: "monospace",
+        fontSize: "10px",
+        color: "#9ad0c8",
+      }).setOrigin(1, 0);
+      bg.on("pointerdown", () => {
+        if (command.used) return;
+        this.selectedCommandId = this.selectedCommandId === command.id ? null : command.id;
+        this.refreshCommandButtons();
+      });
+      this.commandButtons.push({ bg, title, body, commandId: command.id });
+    });
+  }
+
+  private createPostMatchPanel() {
+    this.postMatchBg = this.add.rectangle(480, 270, 420, 220, 0x0d1822, 0.96).setStrokeStyle(2, 0x7ecfd0, 0.95).setVisible(false);
     this.postMatchText = this.add
-      .text(this.scale.width / 2 - 260, this.scale.height / 2 - 110, "", {
-        fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#e9fff4",
-        lineSpacing: 4,
+      .text(480, 236, "", {
+        fontFamily: "Georgia",
+        fontSize: "24px",
+        color: CREAM,
+        align: "center",
+        fontStyle: "bold",
       })
-      .setDepth(71)
-      .setScrollFactor(0)
+      .setOrigin(0.5)
       .setVisible(false);
     this.postMatchHint = this.add
-      .text(this.scale.width / 2, this.scale.height / 2 + 108, "Press ENTER to return to menu", {
+      .text(480, 316, "ENTER to return to menu", {
         fontFamily: "monospace",
         fontSize: "12px",
-        color: "#ffd99f",
+        color: "#d3e5ed",
       })
-      .setOrigin(0.5, 0.5)
-      .setDepth(71)
-      .setScrollFactor(0)
+      .setOrigin(0.5)
       .setVisible(false);
+  }
 
-    this.refreshHand();
-    this.showFeedback(`Event: ${activeEvent.label}`);
-
-    this.helpText = this.add
-      .text(16, 44, "A Move | S Shoot | D Pass | hold to aim/release play | P possession | T pause | ESC menu", {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#eafff6",
-      })
-      .setShadow(1, 1, "#000", 2);
-
-    this.cardDebugText = this.add
-      .text(16, 62, `Card Debug: ${this.sim.getLastCardDebugLine()}`, {
-        fontFamily: "monospace",
-        fontSize: "12px",
-        color: "#ffd791",
-      })
-      .setShadow(1, 1, "#000", 2);
-
-    this.input.keyboard?.on("keydown-P", () => {
-      this.sim.togglePossession();
-      this.refreshHand();
-    });
-
+  private bindInput() {
+    this.input.keyboard?.on("keydown-ONE", () => this.playCardAtIndex(0));
+    this.input.keyboard?.on("keydown-TWO", () => this.playCardAtIndex(1));
+    this.input.keyboard?.on("keydown-THREE", () => this.playCardAtIndex(2));
+    this.input.keyboard?.on("keydown-FOUR", () => this.playCardAtIndex(3));
     this.input.keyboard?.on("keydown-ESC", () => {
-      if (this.pendingAimCardId) {
-        this.cancelAimMode("Aim canceled");
+      if (this.pendingCardId) {
+        this.pendingCardId = null;
+        this.targetOptions = [];
+        this.refreshUi(null, false);
         return;
       }
       this.scene.start("MainMenuScene");
     });
-
-    this.input.keyboard?.on("keydown-F3", () => {
-      this.overlayVisible = !this.overlayVisible;
-      this.perf.setVisible(this.overlayVisible);
-    });
-
-    this.input.keyboard?.on("keydown-F4", () => {
-      this.aiDebugVisible = !this.aiDebugVisible;
-      this.matchView.setAiDebugVisible(this.aiDebugVisible);
-      this.showFeedback(this.aiDebugVisible ? "AI debug on" : "AI debug off");
-    });
-
-    this.input.keyboard?.on("keydown-T", () => {
-      this.tacticalPause = !this.tacticalPause;
-      this.tacticalOverlay.setVisible(this.tacticalPause);
-      this.simAccumulatorMs = 0;
-      this.showFeedback(this.tacticalPause ? "Tactical pause" : "Resume play");
-    });
-
     this.input.keyboard?.on("keydown-ENTER", () => {
-      if (!this.postMatchApplied) return;
-      this.scene.start("MainMenuScene");
+      if (this.engine.getState().winner) this.scene.start("MainMenuScene");
     });
-    this.input.keyboard?.on("keydown-A", () => this.onCardHotkeyDown("A"));
-    this.input.keyboard?.on("keydown-S", () => this.onCardHotkeyDown("S"));
-    this.input.keyboard?.on("keydown-D", () => this.onCardHotkeyDown("D"));
-    this.input.keyboard?.on("keyup-A", () => this.onCardHotkeyUp("A"));
-    this.input.keyboard?.on("keyup-S", () => this.onCardHotkeyUp("S"));
-    this.input.keyboard?.on("keyup-D", () => this.onCardHotkeyUp("D"));
-    this.input.on("pointerdown", this.onAimPointerDown, this);
-    this.input.on("pointermove", this.onAimPointerMove, this);
-    this.input.on("pointerup", this.onAimPointerUp, this);
-
-    this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    this.pinUiToCamera();
-    const initialState = this.sim.getRenderState();
-    this.lastPhase = initialState.phase;
-    this.centerCameraOn(initialState.ball.pos.x, initialState.ball.pos.y, 0, 0, true);
   }
 
-  update(_time: number, delta: number) {
+  private playCardAtIndex(index: number) {
+    const cardId = this.handButtons[index]?.cardId;
+    if (cardId) this.onCardPicked(cardId);
+  }
+
+  private onCardPicked(cardId: string) {
+    const targetOptions = this.engine.getTargetOptions(cardId);
+    if (targetOptions.length > 0) {
+      this.pendingCardId = cardId;
+      this.targetOptions = targetOptions;
+      this.refreshUi(null, false);
+      return;
+    }
+    this.executeCard(cardId);
+  }
+
+  private resolvePendingCard(targetId: TokenId) {
+    if (!this.pendingCardId) return;
+    this.executeCard(this.pendingCardId, targetId);
+    this.pendingCardId = null;
+    this.targetOptions = [];
+  }
+
+  private executeCard(cardId: string, targetId?: TokenId) {
     try {
-      const frameDeltaMs = Math.min(delta, 250);
-      if (this.pendingAimCardId && this.time.now >= this.aimUntilMs) {
-        this.cancelAimMode("Aim timed out");
-      }
-      const simSpeed = this.pendingAimCardId ? AIM_SLOWMO_FACTOR : 1;
-      let steps = 0;
-      if (!this.tacticalPause) {
-        this.simAccumulatorMs += frameDeltaMs * simSpeed;
-        while (this.simAccumulatorMs >= SIM_TICK_MS && steps < MAX_SIM_STEPS_PER_FRAME) {
-          this.sim.step(SIM_TICK_MS);
-          this.simAccumulatorMs -= SIM_TICK_MS;
-          steps += 1;
-        }
-      } else {
-        this.simAccumulatorMs = 0;
-      }
-
-    const alpha = this.tacticalPause ? 0 : Phaser.Math.Clamp(this.simAccumulatorMs / SIM_TICK_MS, 0, 1);
-    const state = this.sim.getRenderState();
-    if (state.phase !== this.lastPhase) {
-      if (state.phase === "HALFTIME") {
-        this.commentaryQueue.enqueue({ text: "Halftime. Reset and adjust.", team: null, priority: 82, immediate: true }, this.time.now);
-      } else if (state.phase === "ENDED") {
-        this.commentaryQueue.enqueue({ text: "Full time.", team: null, priority: 90, immediate: true }, this.time.now);
-      } else if (state.phase === "LIVE" && this.lastPhase === "HALFTIME") {
-        this.commentaryQueue.enqueue({ text: "Second half underway!", team: null, priority: 76, immediate: true }, this.time.now);
-      }
-      this.lastPhase = state.phase;
-    }
-    if (state.phase === "ENDED" && !this.postMatchApplied) {
-      this.applyPostMatchProgression(state);
-    }
-    const activePlayer = this.sim.getActivePlayerForUi();
-    this.matchView.render(state, alpha, activePlayer?.id ?? null);
-    this.hud.updateFromState(state);
-    this.activePlayerPanel.updatePlayer(activePlayer);
-    if (this.selectedCardUntilMs > 0 && this.time.now >= this.selectedCardUntilMs) {
-      this.selectedCardId = null;
-      this.selectedCardUntilMs = 0;
-    }
-    this.refreshHand();
-    this.updateAimVisuals();
-
-    const events = this.sim.drainEvents();
-    if (events.length > 0) {
-      for (const e of events) {
-        this.enqueueCommentaryFromEvent(e);
-        if (e.type === "card_result") {
-          const prefix = e.cardType ?? e.cardId;
-          const msg = e.success ? `${prefix}: ${e.reason}` : `${prefix}: ${e.reason}`;
-          this.showFeedback(msg);
-          this.announceText.setText(msg).setScale(e.success ? 0.92 : 0.9).setAlpha(1);
-          this.tweens.add({
-            targets: this.announceText,
-            scaleX: e.success ? 1.04 : 1.02,
-            scaleY: e.success ? 1.04 : 1.02,
-            alpha: 0,
-            duration: e.success ? 500 : 620,
-            ease: "Quad.easeOut",
-          });
-          if (e.success && e.cardType) {
-            if (["PASS", "THROUGH_PASS", "LONG_BALL", "CROSS"].includes(e.cardType)) {
-              this.spawnPitchBurst(state.ball.pos.x, state.ball.pos.y, 0x9ff7df, 6);
-            }
-            if (e.cardType === "SHOOT") {
-              this.cameras.main.shake(95, 0.0015, true);
-              this.spawnPitchBurst(state.ball.pos.x, state.ball.pos.y, 0xffbe8a, 8);
-            }
-            if (e.cardType === "TACKLE") {
-              this.spawnPitchBurst(state.ball.pos.x, state.ball.pos.y, 0xff9d83, 9);
-            }
-          }
-        }
-        if (e.type === "ball_transition" && ["throw_in", "corner_kick", "goal_kick", "free_kick"].includes(e.reason)) {
-          this.showFeedback(e.reason.replace("_", " ").toUpperCase());
-        }
-        if (e.type === "goal_scored") {
-          this.cameras.main.shake(150, 0.0022, true);
-          this.spawnPitchBurst(state.ball.pos.x, state.ball.pos.y, e.team === "HOME" ? 0x79beff : 0xffd673, 14);
-          this.spawnGoalImpactFx(e.team, { x: state.ball.pos.x, y: state.ball.pos.y });
-        }
-      }
-    }
-
-    const nextCommentary = this.commentaryQueue.pull(this.time.now);
-    if (nextCommentary) {
-      this.showCommentary(nextCommentary);
-    } else if (!this.commentaryQueue.isActive(this.time.now) && this.commentaryBg.visible) {
-      this.hideCommentary();
-    }
-
-    if (this.time.now > this.feedbackUntilMs) {
-      this.feedbackText.setText("");
-    }
-
-    if (this.overlayVisible) {
-      const fps = this.game.loop.actualFps;
-      this.perf.setMetrics({
-        fps,
-        frameMs: delta,
-        simSteps: steps,
-        events: events.length,
-      });
-    }
-
-      this.centerCameraOn(state.ball.pos.x, state.ball.pos.y, state.ball.vel.x, state.ball.vel.y, false);
+      const result = this.engine.playUserCard(cardId, this.selectedCommandId ?? undefined, targetId);
+      this.selectedCommandId = null;
+      this.applyPlayResult(result);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("[MatchScene] update failed", error);
-      this.showFeedback(`Runtime error: ${msg}`);
-      this.simAccumulatorMs = 0;
+      const message = error instanceof Error ? error.message : String(error);
+      this.phaseText.setText(message);
+      this.selectionText.setText("Try a different action or target.");
     }
   }
 
-  shutdown() {
-    this.input.off("pointerdown", this.onAimPointerDown, this);
-    this.input.off("pointermove", this.onAimPointerMove, this);
-    this.input.off("pointerup", this.onAimPointerUp, this);
-    this.matchView?.destroy();
-    this.aimGfx?.destroy();
-    this.aimHintText?.destroy();
-    this.postMatchBg?.destroy();
-    this.postMatchText?.destroy();
-    this.postMatchHint?.destroy();
-  }
-
-  private enqueueCommentaryFromEvent(event: SimEvent) {
-    const lines = commentaryFromEvent(event);
-    for (const line of lines) {
-      this.commentaryQueue.enqueue(line, this.time.now);
-    }
-  }
-
-  private showCommentary(line: CommentaryLine) {
-    const tint = line.team === "AWAY" ? 0xffd673 : 0x79beff;
-    this.commentaryAccent.setFillStyle(tint, 1);
-    this.commentaryText.setText(line.text);
-    this.commentaryBg.setVisible(true).setAlpha(0.05);
-    this.commentaryAccent.setVisible(true).setAlpha(0.05);
-    this.commentaryText.setVisible(true).setAlpha(0.05);
-
+  private applyPlayResult(result: PlayResult) {
+    this.activeLane = result.laneAfter;
+    this.tweens.killTweensOf([this.ballMarker]);
     this.tweens.add({
-      targets: [this.commentaryBg, this.commentaryAccent, this.commentaryText],
-      duration: 140,
-      alpha: 1,
-      ease: "Quad.easeOut",
-    });
-  }
-
-  private hideCommentary() {
-    this.tweens.add({
-      targets: [this.commentaryBg, this.commentaryAccent, this.commentaryText],
-      duration: 120,
-      alpha: 0,
-      ease: "Quad.easeOut",
-      onComplete: () => {
-        this.commentaryBg.setVisible(false);
-        this.commentaryAccent.setVisible(false);
-        this.commentaryText.setVisible(false);
-      },
-    });
-  }
-
-  private applyPostMatchProgression(state: ReturnType<MatchSim["getRenderState"]>) {
-    const profile = loadProfile();
-    const { updated, summary } = applyMatchProgression(profile, state, this.squadIdsForProgression);
-    updateCollectionAndManager({ collection: updated.collection, manager: updated.manager });
-    this.postMatchApplied = true;
-    this.showPostMatchSummary(summary);
-  }
-
-  private showPostMatchSummary(summary: MatchProgressSummary) {
-    const headline = `FULL TIME ${summary.scoreLabel} (${summary.resultLabel})`;
-    const divisionDelta =
-      summary.divisionAfter < summary.divisionBefore
-        ? "PROMOTION"
-        : summary.divisionAfter > summary.divisionBefore
-        ? "RELEGATION"
-        : `DIV ${summary.divisionAfter}`;
-    const managerLine = `Event: ${summary.eventLabel} | Manager +${summary.managerXpGained} XP | Coins +${summary.coinsGained}`;
-    const seasonLine = `Level ${summary.managerLevelBefore} -> ${summary.managerLevelAfter} | Season ${summary.seasonNumber} | ${divisionDelta}`;
-    const topPlayers = summary.playerGains
-      .slice(0, 6)
-      .map((p) => {
-        const lv = p.levelsGained > 0 ? ` L${p.levelBefore}->${p.levelAfter}` : "";
-        const perks = p.perkSlotsUnlocked > 0 ? " +Perk" : "";
-        const traits = p.newTraits.length > 0 ? " +Trait" : "";
-        return `${p.name}: +${p.xpGained} XP${lv}${perks}${traits}`;
-      })
-      .join("\n");
-
-    const seasonNotice = summary.seasonReset ? "\nSeason rollover applied." : "";
-    this.postMatchText.setText(`${headline}\n${managerLine}\n${seasonLine}${seasonNotice}\n\nSquad Progress\n${topPlayers}`);
-    this.postMatchBg.setVisible(true);
-    this.postMatchText.setVisible(true);
-    this.postMatchHint.setVisible(true);
-  }
-
-  private tryPlayCard(
-    cardId: string,
-    cardInput: { direction: { x: number; y: number }; targetPos: { x: number; y: number }; power?: number }
-  ) {
-    const ok = this.sim.playCard(cardId, cardInput);
-    this.cardDebugText.setText(`Card Debug: ${this.sim.getLastCardDebugLine()}`);
-    if (!ok) {
-      this.handView.pulseInvalid(cardId);
-      const reason = this.sim.getLastActionMessage();
-      if (reason) {
-        this.showFeedback(reason);
-        this.announceText.setText(reason).setScale(0.94).setAlpha(1);
-        this.tweens.add({
-          targets: this.announceText,
-          scaleX: 1.02,
-          scaleY: 1.02,
-          alpha: 0,
-          duration: 620,
-          ease: "Quad.easeOut",
-        });
-      }
-      return false;
-    }
-    this.handView.pulsePlayed(cardId);
-    this.refreshHand();
-    return true;
-  }
-
-  private onCardHotkeyDown(key: HandHotkey) {
-    if (this.hotkeyHeld.has(key)) return;
-    this.hotkeyHeld.add(key);
-    this.hotkeyHoldStartedAtMs.set(key, this.time.now);
-
-    if (this.pendingAimCardId && this.hotkeyAimKey && this.hotkeyAimKey !== key) {
-      this.showFeedback("Finish current aim first");
-      return;
-    }
-
-    const cardId = this.getCardIdForHotkey(key);
-    if (!cardId) {
-      this.showFeedback(`${key}: empty slot`);
-      this.hotkeyCardByKey.delete(key);
-      return;
-    }
-
-    this.hotkeyCardByKey.set(key, cardId);
-    this.selectedCardId = cardId;
-    this.selectedCardUntilMs = this.time.now + AIM_WINDOW_MS;
-
-    if (this.shouldUseDragAim(cardId)) {
-      this.hotkeyAimKey = key;
-      this.beginAimMode(cardId, "hotkey");
-      this.setAimTargetFromPointer(this.input.activePointer);
-      return;
-    }
-
-    this.showFeedback(`Hold ${key}, release to play`);
-  }
-
-  private onCardHotkeyUp(key: HandHotkey) {
-    if (!this.hotkeyHeld.has(key)) return;
-    this.hotkeyHeld.delete(key);
-    const holdStartedAt = this.hotkeyHoldStartedAtMs.get(key);
-    this.hotkeyHoldStartedAtMs.delete(key);
-    const holdMs = holdStartedAt !== undefined ? Math.max(0, this.time.now - holdStartedAt) : 0;
-
-    const cardId = this.hotkeyCardByKey.get(key);
-    this.hotkeyCardByKey.delete(key);
-    if (!cardId) return;
-
-    if (this.pendingAimCardId && this.hotkeyAimKey === key) {
-      this.executeAimedCard(holdMs);
-      this.hotkeyAimKey = null;
-      return;
-    }
-
-    if (this.pendingAimCardId) return;
-
-    this.selectedCardId = cardId;
-    this.selectedCardUntilMs = this.time.now + 900;
-    this.tryPlayCard(cardId, this.buildCardInput(holdMs, cardId));
-  }
-
-  private getCardIdForHotkey(key: HandHotkey) {
-    return this.hotkeyDisplayCardByKey.get(key) ?? null;
-  }
-
-  private shouldUseDragAim(cardId: string) {
-    if (this.sim.getActiveDeckKind() !== "ATTACK") return false;
-    const type = this.cardTypeById.get(cardId);
-    if (!type) return false;
-    return AIM_CARD_TYPES.has(type);
-  }
-
-  private beginAimMode(cardId: string, confirmMode: AimConfirmMode = "pointer") {
-    this.cancelAimMode();
-    const state = this.sim.getRenderState();
-    const actor = this.sim.getActivePlayerForUi();
-    const rawOrigin = actor?.pos ?? state.ball.pos;
-    const origin = this.clampAimPoint(rawOrigin.x, rawOrigin.y);
-    const dirX = actor?.teamId === "AWAY" ? -1 : 1;
-
-    this.pendingAimCardId = cardId;
-    this.aimOrigin = origin;
-    this.aimTarget = this.clampAimPoint(origin.x + dirX * AIM_LINE_LENGTH_PX, origin.y);
-    this.aimUntilMs = this.time.now + AIM_WINDOW_MS;
-    this.aimDragActive = false;
-    this.aimConfirmMode = confirmMode;
-    this.selectedCardId = cardId;
-    this.selectedCardUntilMs = this.aimUntilMs;
-
-    const controlHint = confirmMode === "hotkey" ? "release key to play" : "release mouse to play";
-    this.showFeedback(`Aim: drag (${controlHint}, 5.0s)`);
-    this.updateAimVisuals();
-  }
-
-  private cancelAimMode(message?: string) {
-    const hotkeyAimKey = this.hotkeyAimKey;
-    const confirmMode = this.aimConfirmMode;
-    this.pendingAimCardId = null;
-    this.aimOrigin = null;
-    this.aimTarget = null;
-    this.aimUntilMs = 0;
-    this.aimDragActive = false;
-    this.aimConfirmMode = null;
-    this.aimGfx.clear();
-    this.aimHintText.setVisible(false).setText("");
-    if (confirmMode === "hotkey" && hotkeyAimKey) {
-      this.hotkeyCardByKey.delete(hotkeyAimKey);
-      this.hotkeyAimKey = null;
-    }
-    if (this.selectedCardUntilMs === 0 || this.time.now >= this.selectedCardUntilMs) {
-      this.selectedCardId = null;
-    }
-    if (message) this.showFeedback(message);
-  }
-
-  private executeAimedCard(holdMs?: number) {
-    if (!this.pendingAimCardId) return;
-    const cardId = this.pendingAimCardId;
-    const input = this.buildAimedCardInput(holdMs, cardId);
-    this.cancelAimMode();
-    this.selectedCardId = cardId;
-    this.selectedCardUntilMs = this.time.now + 900;
-    this.tryPlayCard(cardId, input);
-  }
-
-  private buildAimedCardInput(holdMs?: number, cardId?: string) {
-    if (!this.aimOrigin || !this.aimTarget) {
-      return this.buildCardInput(holdMs, cardId);
-    }
-    const dx = this.aimTarget.x - this.aimOrigin.x;
-    const dy = this.aimTarget.y - this.aimOrigin.y;
-    const mag = Math.hypot(dx, dy);
-    const fallback = this.buildCardInput().direction;
-    const direction = mag > 0.0001 ? { x: dx / mag, y: dy / mag } : fallback;
-    const power = cardId ? this.getCardInputPower(cardId, holdMs) : undefined;
-    return {
-      direction,
-      targetPos: { x: this.aimTarget.x, y: this.aimTarget.y },
-      power,
-    };
-  }
-
-  private updateAimVisuals() {
-    if (!this.pendingAimCardId || !this.aimOrigin || !this.aimTarget) {
-      this.aimGfx.clear();
-      this.aimHintText.setVisible(false).setText("");
-      return;
-    }
-    const remainingMs = Math.max(0, this.aimUntilMs - this.time.now);
-    const type = this.pendingAimCardId ? this.cardTypeById.get(this.pendingAimCardId) : undefined;
-    const showPower = Boolean(type && POWER_AFFECTED_CARD_TYPES.has(type));
-    const power = showPower ? this.getCurrentAimPower(this.pendingAimCardId ?? undefined) : 0;
-    const suffix = this.aimConfirmMode === "hotkey" ? "release key to play" : "release mouse to play";
-    const powerTxt = showPower ? `  POW ${Math.round(power * 100)}%` : "";
-    this.aimHintText.setVisible(true).setText(`AIM ${(remainingMs / 1000).toFixed(1)}s  ${suffix}${powerTxt}`);
-
-    this.aimGfx.clear();
-    this.aimGfx.lineStyle(2, 0x8de8ff, 0.75);
-    this.aimGfx.beginPath();
-    this.aimGfx.moveTo(this.aimOrigin.x, this.aimOrigin.y);
-    this.aimGfx.lineTo(this.aimTarget.x, this.aimTarget.y);
-    this.aimGfx.strokePath();
-    if (showPower) {
-      const fillX = Phaser.Math.Linear(this.aimOrigin.x, this.aimTarget.x, power);
-      const fillY = Phaser.Math.Linear(this.aimOrigin.y, this.aimTarget.y, power);
-      this.aimGfx.lineStyle(4, 0xffe38b, 0.95);
-      this.aimGfx.beginPath();
-      this.aimGfx.moveTo(this.aimOrigin.x, this.aimOrigin.y);
-      this.aimGfx.lineTo(fillX, fillY);
-      this.aimGfx.strokePath();
-    }
-    this.aimGfx.fillStyle(0x8de8ff, 0.22);
-    this.aimGfx.fillCircle(this.aimOrigin.x, this.aimOrigin.y, 10);
-    this.aimGfx.fillStyle(0xffffff, 0.95);
-    this.aimGfx.fillCircle(this.aimTarget.x, this.aimTarget.y, 4);
-  }
-
-  private onAimPointerDown(pointer: Phaser.Input.Pointer) {
-    if (!this.pendingAimCardId) return;
-    this.aimDragActive = true;
-    this.setAimTargetFromPointer(pointer);
-  }
-
-  private onAimPointerMove(pointer: Phaser.Input.Pointer) {
-    if (!this.pendingAimCardId) return;
-    if (this.aimConfirmMode !== "hotkey" && !this.aimDragActive) return;
-    this.setAimTargetFromPointer(pointer);
-  }
-
-  private onAimPointerUp(pointer: Phaser.Input.Pointer) {
-    if (!this.pendingAimCardId) return;
-    if (this.aimConfirmMode !== "hotkey" && !this.aimDragActive) return;
-    this.aimDragActive = false;
-    this.setAimTargetFromPointer(pointer);
-    if (this.aimConfirmMode === "pointer") {
-      this.executeAimedCard();
-    }
-  }
-
-  private setAimTargetFromPointer(pointer: Phaser.Input.Pointer) {
-    if (!this.aimOrigin) return;
-    const worldX = Number.isFinite(pointer.worldX) ? pointer.worldX : this.cameras.main.worldView.centerX;
-    const worldY = Number.isFinite(pointer.worldY) ? pointer.worldY : this.cameras.main.worldView.centerY;
-    const dx = worldX - this.aimOrigin.x;
-    const dy = worldY - this.aimOrigin.y;
-    const mag = Math.hypot(dx, dy);
-    const fallback = this.aimTarget
-      ? { x: this.aimTarget.x - this.aimOrigin.x, y: this.aimTarget.y - this.aimOrigin.y }
-      : { x: 1, y: 0 };
-    const dir =
-      mag > 0.0001
-        ? { x: dx / mag, y: dy / mag }
-        : Math.hypot(fallback.x, fallback.y) > 0.0001
-        ? { x: fallback.x / Math.hypot(fallback.x, fallback.y), y: fallback.y / Math.hypot(fallback.x, fallback.y) }
-        : { x: 1, y: 0 };
-    this.aimTarget = this.clampAimPoint(this.aimOrigin.x + dir.x * AIM_LINE_LENGTH_PX, this.aimOrigin.y + dir.y * AIM_LINE_LENGTH_PX);
-    this.updateAimVisuals();
-  }
-
-  private clampAimPoint(x: number, y: number) {
-    return {
-      x: Phaser.Math.Clamp(Number.isFinite(x) ? x : PITCH_LEFT + PITCH_WIDTH / 2, PITCH_LEFT + 6, PITCH_LEFT + PITCH_WIDTH - 6),
-      y: Phaser.Math.Clamp(Number.isFinite(y) ? y : PITCH_TOP + PITCH_HEIGHT / 2, PITCH_TOP + 6, PITCH_TOP + PITCH_HEIGHT - 6),
-    };
-  }
-
-  private getHotkeyDisplayCards(cardIds: string[]) {
-    const used = new Set<string>();
-    const out: string[] = [];
-    const prefs = this.sim.getActiveDeckKind() === "ATTACK" ? ATTACK_LANE_PREFS : DEFENSE_LANE_PREFS;
-
-    for (const key of HAND_HOTKEYS) {
-      const candidate = this.pickBestByPreferredTypes(cardIds, prefs[key], used);
-      if (candidate) {
-        used.add(candidate);
-        out.push(candidate);
-      } else {
-        out.push("");
-      }
-    }
-
-    const leftovers = cardIds
-      .filter((id) => !used.has(id))
-      .sort((a, b) => (this.cardPowerById.get(b) ?? 1) - (this.cardPowerById.get(a) ?? 1));
-    for (let i = 0; i < out.length; i++) {
-      if (out[i]) continue;
-      out[i] = leftovers.shift() ?? "";
-    }
-    return out;
-  }
-
-  private pickBestByPreferredTypes(cardIds: string[], preferred: CardDef["type"][], used: Set<string>) {
-    let best: string | null = null;
-    let bestRank = Number.POSITIVE_INFINITY;
-    let bestPower = Number.NEGATIVE_INFINITY;
-    for (const id of cardIds) {
-      if (used.has(id)) continue;
-      const type = this.cardTypeById.get(id);
-      if (!type) continue;
-      const rank = preferred.indexOf(type);
-      if (rank < 0) continue;
-      const power = this.cardPowerById.get(id) ?? 1;
-      if (rank < bestRank || (rank === bestRank && power > bestPower)) {
-        bestRank = rank;
-        bestPower = power;
-        best = id;
-      }
-    }
-    return best;
-  }
-
-  private getCardLabel(cardId: string) {
-    const type = this.cardTypeById.get(cardId) ?? "PASS";
-    const power = this.cardPowerById.get(cardId) ?? 1;
-    const action = this.getActionName(type);
-    return `${action} P${power}`;
-  }
-
-  private getActionName(type: CardDef["type"]) {
-    switch (type) {
-      case "LONG_BALL":
-        return "LONG";
-      case "THROUGH_PASS":
-        return "THRU";
-      default:
-        return type;
-    }
-  }
-
-  private extractCardPower(cardId: string) {
-    const m = cardId.match(/_(\d+)$/);
-    if (!m) return 1;
-    const value = Number.parseInt(m[1], 10);
-    return Number.isFinite(value) && value > 0 ? value : 1;
-  }
-
-  private refreshHand() {
-    const cardIds = this.sim.getActiveHandCardIds();
-    const ordered = this.getHotkeyDisplayCards(cardIds);
-    this.hotkeyDisplayCardByKey.clear();
-    if (ordered[0]) this.hotkeyDisplayCardByKey.set("A", ordered[0]);
-    if (ordered[1]) this.hotkeyDisplayCardByKey.set("S", ordered[1]);
-    if (ordered[2]) this.hotkeyDisplayCardByKey.set("D", ordered[2]);
-    const uiMeta = this.sim.getActiveHandCardUi();
-    const cardState: Record<string, HandCardUiState> = {};
-    const cardLabels: Record<string, string> = {};
-
-    for (const id of cardIds) {
-      const meta = uiMeta[id];
-      if (!meta) continue;
-      cardState[id] = {
-        status: meta.status,
-        cooldownMs: meta.cooldownMs,
-        hint: meta.reason,
-        selected: this.selectedCardId === id && this.time.now <= this.selectedCardUntilMs,
-      };
-      cardLabels[id] = this.getCardLabel(id);
-    }
-
-    this.handView.setCards(ordered, cardState, cardLabels);
-  }
-
-  private buildCardInput(holdMs?: number, cardId?: string) {
-    const state = this.sim.getRenderState();
-    const actor = this.sim.getActivePlayerForUi();
-    const rawOrigin = actor?.pos ?? state.ball.pos;
-    const origin = {
-      x: Number.isFinite(rawOrigin.x) ? rawOrigin.x : state.ball.pos.x,
-      y: Number.isFinite(rawOrigin.y) ? rawOrigin.y : state.ball.pos.y,
-    };
-    const distance = 220;
-    const dirX = actor?.teamId === "AWAY" ? -1 : 1;
-    const direction = { x: dirX, y: 0 };
-    const targetPos = {
-      x: origin.x + direction.x * distance,
-      y: Number.isFinite(origin.y) ? origin.y : state.ball.pos.y,
-    };
-    return {
-      direction,
-      targetPos,
-      power: cardId ? this.getCardInputPower(cardId, holdMs) : undefined,
-    };
-  }
-
-  private getCurrentAimPower(cardId?: string) {
-    if (!cardId) return 0.5;
-    if (!this.hotkeyAimKey) return 0.5;
-    const startedAt = this.hotkeyHoldStartedAtMs.get(this.hotkeyAimKey);
-    const holdMs = startedAt !== undefined ? Math.max(0, this.time.now - startedAt) : 0;
-    return this.getCardInputPower(cardId, holdMs) ?? 0.5;
-  }
-
-  private getCardInputPower(cardId: string, holdMs?: number) {
-    const type = this.cardTypeById.get(cardId);
-    if (!type || !POWER_AFFECTED_CARD_TYPES.has(type)) return undefined;
-    const ms = Math.max(0, holdMs ?? 0);
-    const norm = Phaser.Math.Clamp(ms / POWER_HOLD_MAX_MS, 0, 1);
-    return 0.2 + norm * 0.8;
-  }
-
-  private showFeedback(text: string) {
-    this.feedbackText.setText(text);
-    this.feedbackUntilMs = this.time.now + 1300;
-  }
-
-  private spawnPitchBurst(x: number, y: number, color: number, count: number) {
-    for (let i = 0; i < count; i++) {
-      const angle = (Math.PI * 2 * i) / count + Phaser.Math.FloatBetween(-0.25, 0.25);
-      const speed = Phaser.Math.FloatBetween(14, 58);
-      const piece = this.add.rectangle(x, y, 2, 2, color, 0.95).setDepth(18);
-      this.tweens.add({
-        targets: piece,
-        duration: 160,
-        x: x + Math.cos(angle) * speed,
-        y: y + Math.sin(angle) * speed,
-        alpha: 0,
-        ease: "Quad.easeOut",
-        onComplete: () => piece.destroy(),
-      });
-    }
-  }
-
-  private spawnGoalImpactFx(scoringTeam: TeamId, fromPos: { x: number; y: number }) {
-    const toRight = scoringTeam === "HOME";
-    const goalX = toRight ? GOAL_LINE_RIGHT_X + 12 : GOAL_LINE_LEFT_X - 12;
-    const goalY = Phaser.Math.Clamp(fromPos.y, PITCH_CENTER_Y - 60, PITCH_CENTER_Y + 60);
-    const trailColor = toRight ? 0x9fe3ff : 0xffe69d;
-    const ballFx = this.add
-      .sprite(fromPos.x, fromPos.y, "ball_shot")
-      .setDepth(19)
-      .setScale(0.5)
-      .setAlpha(0.95);
-    let lastTrailAt = -9999;
-
-    this.tweens.add({
-      targets: ballFx,
-      x: goalX,
-      y: goalY,
-      duration: 220,
+      targets: this.ballMarker,
+      x: this.xForZone(result.zoneAfter),
+      y: this.yForLane(result.laneAfter),
+      duration: 240,
       ease: "Cubic.easeOut",
-      onUpdate: () => {
-        if (this.time.now - lastTrailAt < 28) return;
-        lastTrailAt = this.time.now;
-        const dot = this.add.circle(ballFx.x, ballFx.y, 1.8, trailColor, 0.52).setDepth(18);
-        this.tweens.add({
-          targets: dot,
-          duration: 130,
-          alpha: 0,
-          scaleX: 0.45,
-          scaleY: 0.45,
-          ease: "Quad.easeOut",
-          onComplete: () => dot.destroy(),
-        });
-      },
-      onComplete: () => {
-        ballFx.destroy();
-        this.spawnNetRipple(scoringTeam, goalY);
-      },
+      onComplete: () => this.refreshUi(result, false),
+    });
+    this.refreshUi(result, false);
+  }
+
+  private refreshUi(result: PlayResult | null, instant: boolean) {
+    const state = this.engine.getState();
+    const clock = this.engine.getClockView();
+    this.scoreText.setText(`${state.homeLabel} ${state.score.HOME}  :  ${state.score.AWAY} ${state.awayLabel}`);
+    this.clockText.setText(`H${clock.half}  ${clock.minute}'  |  ${state.possession === "HOME" ? "Attack Phase" : "Defense Phase"}  |  ${clock.turnsRemaining} turns left`);
+    this.phaseText.setText(state.possession === "HOME" ? "Choose your action" : "Choose your defensive answer");
+    this.selectionText.setText(this.pendingCardId ? `Choose the receiver or runner on the pitch.` : state.possession === "HOME" ? "Pick a card, then pick a visible target if required." : "Pick your defensive card. CPU action resolves after you commit.");
+    this.resolutionText.setText(
+      result
+        ? `${formatCardLabel(result.userCardId)} -> ${formatCardLabel(state.possession === "HOME" ? result.defenseCardId : result.offenseCardId)}\n${result.summary}`
+        : "Both sides commit one move per round.\nOutcome resolves immediately after the response."
+    );
+    this.commentaryText.setText(result ? result.detail : "Goalkeepers, defenders, midfielders, and forwards are all visible on the board.");
+
+    const momentumWidth = 24 + ((state.momentum + 6) / 12) * 168;
+    this.momentumFill.setDisplaySize(momentumWidth, 10);
+    this.momentumFill.setPosition(728 + momentumWidth / 2, 40);
+    this.momentumFill.setFillStyle(state.momentum >= 0 ? TEAL : CORAL, 1);
+
+    this.refreshMarkers(instant);
+    this.refreshHandButtons();
+    this.refreshCommandButtons();
+    this.refreshBoardTokens();
+    this.refreshHistory();
+    this.setPostMatchVisible(Boolean(state.winner));
+  }
+
+  private refreshMarkers(instant: boolean) {
+    const state = this.engine.getState();
+    const threatZone = state.possession === "HOME" ? 5 : 1;
+    if (instant) {
+      this.ballMarker.setPosition(this.xForZone(state.zone), this.yForLane(this.activeLane));
+    }
+    this.attackBandMarker.setPosition(this.xForZone(threatZone), FIELD_TOP + FIELD_HEIGHT / 2);
+    this.attackBandMarker.setFillStyle(state.possession === "HOME" ? TEAL : CORAL, 0.74);
+  }
+
+  private refreshHandButtons() {
+    const deckKind = this.engine.getUserDeckKind();
+    const cards = this.engine.getUserHand();
+    this.handButtons.forEach((button, index) => {
+      const card = cards[index];
+      button.cardId = card?.id ?? null;
+      button.bg.setVisible(Boolean(card));
+      button.accent.setVisible(Boolean(card));
+      button.hotkey.setVisible(Boolean(card));
+      button.title.setVisible(Boolean(card));
+      button.meta.setVisible(Boolean(card));
+      button.body.setVisible(Boolean(card));
+      if (!card) return;
+
+      const selected = this.pendingCardId === card.id;
+      button.accent.setFillStyle(deckKind === "OFFENSE" ? TEAL : CORAL, 1);
+      button.bg.setFillStyle(deckKind === "OFFENSE" ? 0x173041 : 0x352521, 1);
+      button.bg.setStrokeStyle(2, selected ? 0xf0c36b : 0x416883, 0.95);
+      button.title.setText(card.name);
+      button.meta.setText(`${deckKind} | ${card.lane}`);
+      button.body.setText(card.description);
     });
   }
 
-  private spawnNetRipple(scoringTeam: TeamId, impactY: number) {
-    const toRight = scoringTeam === "HOME";
-    const frontX = toRight ? PITCH_LEFT + PITCH_WIDTH : PITCH_LEFT;
-    const dir = toRight ? 1 : -1;
-    const goalTop = PITCH_CENTER_Y - 70;
-    const goalBottom = PITCH_CENTER_Y + 70;
-    const depth = 16;
-    const netColor = 0xd9f3ff;
-    const pieces: Phaser.GameObjects.Rectangle[] = [];
+  private refreshCommandButtons() {
+    const commandStates = this.engine.getCommandStates();
+    this.commandButtons.forEach((button) => {
+      const state = commandStates.find((entry) => entry.id === button.commandId);
+      if (!state) return;
+      const selected = this.selectedCommandId === state.id;
+      button.bg.setFillStyle(state.used ? 0x1c252c : selected ? 0x35442f : 0x152636, 1);
+      button.bg.setStrokeStyle(1, state.used ? 0x55626d : selected ? 0xf0c36b : 0x35566d, 0.9);
+      button.title.setAlpha(state.used ? 0.42 : 1);
+      button.body.setAlpha(state.used ? 0.42 : 1);
+      button.body.setText(state.used ? "Spent" : selected ? "Armed" : "Ready");
+    });
+  }
 
-    for (let i = 0; i < 5; i++) {
-      const t = i / 4;
-      const x = frontX + dir * (2 + t * (depth - 2));
-      const v = this.add.rectangle(x, PITCH_CENTER_Y, 1, goalBottom - goalTop, netColor, 0.58).setDepth(18);
-      pieces.push(v);
-    }
-    for (let i = 0; i < 7; i++) {
-      const t = i / 6;
-      const y = goalTop + t * (goalBottom - goalTop);
-      const h = this.add.rectangle(frontX + dir * (depth / 2), y, depth, 1, netColor, 0.48).setDepth(18);
-      pieces.push(h);
-    }
-
-    const impactNorm = Phaser.Math.Clamp((impactY - goalTop) / Math.max(1, goalBottom - goalTop), 0, 1);
-    for (let i = 0; i < pieces.length; i++) {
-      const piece = pieces[i];
-      const rowJitter = Phaser.Math.FloatBetween(-5, 5);
-      const ripple = (0.4 + impactNorm * 0.6) * Phaser.Math.FloatBetween(5, 10);
-      this.tweens.add({
-        targets: piece,
-        x: piece.x + dir * ripple,
-        y: piece.y + rowJitter * 0.35,
-        alpha: 0.05,
-        duration: 220 + i * 4,
-        ease: "Cubic.easeOut",
-        onComplete: () => piece.destroy(),
-      });
+  private refreshBoardTokens() {
+    const tokens = this.engine.getBoardTokens();
+    const targetMap = new Map(this.targetOptions.map((option) => [option.id, option]));
+    for (const token of tokens) {
+      const view = this.tokenViews.get(`${token.teamId}_${token.id}`);
+      if (!view) continue;
+      const x = this.xForZone(token.zone);
+      const y = this.yForLane(token.lane);
+      const selectable = token.teamId === "HOME" && targetMap.has(token.id);
+      view.body.setPosition(x, y);
+      view.ring.setPosition(x, y);
+      view.label.setPosition(x, y);
+      view.role.setPosition(x, y + 20);
+      view.body.setFillStyle(token.teamId === "HOME" ? TEAL : CORAL, 1);
+      view.ring.setVisible(token.hasBall || selectable);
+      view.ring.setStrokeStyle(2, selectable ? 0xf0c36b : 0xffffff, selectable ? 1 : 0.5);
+      view.label.setText(token.roleLabel);
+      view.role.setText(selectable ? targetMap.get(token.id)?.label ?? token.roleLabel : token.roleLabel);
+      view.body.setScale(token.hasBall ? 1.15 : selectable ? 1.08 : 1);
+      view.body.setAlpha(selectable || token.hasBall ? 1 : 0.9);
     }
   }
 
-  private drawPitch() {
-    const g = this.pitchGfx;
+  private refreshHistory() {
+    const history = this.engine.getState().history;
+    this.historyLines.forEach((line, index) => {
+      const play = history[index];
+      line.setText(play ? `${play.summary}` : "");
+    });
+  }
+
+  private setPostMatchVisible(visible: boolean) {
+    this.postMatchBg.setVisible(visible);
+    this.postMatchText.setVisible(visible);
+    this.postMatchHint.setVisible(visible);
+    if (!visible) return;
+    const state = this.engine.getState();
+    const result =
+      state.winner === "HOME" ? "You managed the better tactical match." : state.winner === "AWAY" ? "The CPU outplayed your decisions." : "Stalemate. No side found the killer move.";
+    this.postMatchText.setText(`Full Time\n${state.homeLabel} ${state.score.HOME} - ${state.score.AWAY} ${state.awayLabel}\n\n${result}`);
+  }
+
+  private drawField() {
+    const g = this.fieldGfx;
     g.clear();
-
-    const pitchX = PITCH_LEFT;
-    const pitchY = PITCH_TOP;
-    const pitchW = PITCH_WIDTH;
-    const pitchH = PITCH_HEIGHT;
-    const stripeCount = 12;
-    const stripeW = pitchW / stripeCount;
-    const boxDepth = PENALTY_BOX_DEPTH;
-    const boxHeight = PENALTY_BOX_HEIGHT;
-    const boxY = PITCH_CENTER_Y - boxHeight / 2;
-    const sixYardDepth = Math.max(90, Math.round(boxDepth * 0.38));
-    const sixYardHeight = Math.max(130, Math.round(boxHeight * 0.42));
-    const sixYardY = PITCH_CENTER_Y - sixYardHeight / 2;
-    const penaltySpotOffset = Math.round(boxDepth * 0.56);
-    const goalHeight = 140;
-    const goalDepth = 16;
-    const goalY = PITCH_CENTER_Y - goalHeight / 2;
-
-    g.fillStyle(0x195e35, 1);
-    g.fillRect(pitchX, pitchY, pitchW, pitchH);
-    for (let i = 0; i < stripeCount; i++) {
-      g.fillStyle(i % 2 === 0 ? 0x216b3d : 0x1b6338, 1);
-      g.fillRect(pitchX + i * stripeW, pitchY, stripeW, pitchH);
-    }
-
-    // Subtle edge shading to add depth while keeping pixel-style clarity.
-    g.fillStyle(0x103722, 0.2);
-    g.fillRect(pitchX, pitchY, pitchW, 30);
-    g.fillRect(pitchX, pitchY + pitchH - 30, pitchW, 30);
-
-    g.lineStyle(3, 0xf2fff7, 0.96);
-    g.strokeRect(pitchX, pitchY, pitchW, pitchH);
-    g.lineStyle(2, 0xf2fff7, 0.94);
-    g.beginPath();
-    g.moveTo(pitchX + pitchW / 2, pitchY);
-    g.lineTo(pitchX + pitchW / 2, pitchY + pitchH);
-    g.strokePath();
-    g.strokeCircle(pitchX + pitchW / 2, pitchY + pitchH / 2, 92);
-    g.fillStyle(0xf2fff7, 0.96);
-    g.fillCircle(pitchX + pitchW / 2, pitchY + pitchH / 2, 3);
-
-    g.strokeRect(pitchX, boxY, boxDepth, boxHeight);
-    g.strokeRect(pitchX + pitchW - boxDepth, boxY, boxDepth, boxHeight);
-    g.strokeRect(pitchX, sixYardY, sixYardDepth, sixYardHeight);
-    g.strokeRect(pitchX + pitchW - sixYardDepth, sixYardY, sixYardDepth, sixYardHeight);
-
-    g.fillCircle(pitchX + penaltySpotOffset, PITCH_CENTER_Y, 3);
-    g.fillCircle(pitchX + pitchW - penaltySpotOffset, PITCH_CENTER_Y, 3);
-
-    g.lineStyle(2, 0xdff7ff, 0.7);
-    g.beginPath();
-    g.moveTo(GOAL_LINE_LEFT_X, boxY);
-    g.lineTo(GOAL_LINE_LEFT_X, boxY + boxHeight);
-    g.moveTo(GOAL_LINE_RIGHT_X, boxY);
-    g.lineTo(GOAL_LINE_RIGHT_X, boxY + boxHeight);
-    g.strokePath();
-
-    // Draw simple built-in goals with net lines.
-    g.lineStyle(2, 0xf2fff7, 0.95);
-    g.fillStyle(0xe0f4ff, 0.12);
-    g.fillRect(pitchX - goalDepth, goalY, goalDepth, goalHeight);
-    g.strokeRect(pitchX - goalDepth, goalY, goalDepth, goalHeight);
-    g.fillRect(pitchX + pitchW, goalY, goalDepth, goalHeight);
-    g.strokeRect(pitchX + pitchW, goalY, goalDepth, goalHeight);
-
-    g.lineStyle(1, 0xbad6e4, 0.6);
-    for (let y = goalY + 8; y < goalY + goalHeight; y += 8) {
+    g.fillStyle(0x1f5b46, 1);
+    g.fillRect(FIELD_LEFT, FIELD_TOP, FIELD_WIDTH, FIELD_HEIGHT);
+    for (let i = 0; i < 7; i++) {
+      const stripeX = FIELD_LEFT + i * (FIELD_WIDTH / 7);
+      g.fillStyle(i % 2 === 0 ? 0x255f4a : 0x215b47, 1);
+      g.fillRect(stripeX, FIELD_TOP, FIELD_WIDTH / 7, FIELD_HEIGHT);
+      g.lineStyle(1, 0xe4f2eb, 0.18);
       g.beginPath();
-      g.moveTo(pitchX - goalDepth, y);
-      g.lineTo(pitchX, y);
-      g.moveTo(pitchX + pitchW, y);
-      g.lineTo(pitchX + pitchW + goalDepth, y);
+      g.moveTo(stripeX, FIELD_TOP);
+      g.lineTo(stripeX, FIELD_BOTTOM);
       g.strokePath();
     }
-    for (let x = 4; x < goalDepth; x += 4) {
+    g.lineStyle(2, 0xecf5ef, 0.96);
+    g.strokeRect(FIELD_LEFT, FIELD_TOP, FIELD_WIDTH, FIELD_HEIGHT);
+    g.beginPath();
+    g.moveTo(FIELD_LEFT + FIELD_WIDTH / 2, FIELD_TOP);
+    g.lineTo(FIELD_LEFT + FIELD_WIDTH / 2, FIELD_BOTTOM);
+    g.strokePath();
+    g.strokeCircle(FIELD_LEFT + FIELD_WIDTH / 2, FIELD_TOP + FIELD_HEIGHT / 2, 30);
+    g.fillStyle(0xecf5ef, 0.96);
+    g.fillCircle(FIELD_LEFT + FIELD_WIDTH / 2, FIELD_TOP + FIELD_HEIGHT / 2, 2);
+    g.strokeRect(FIELD_LEFT, FIELD_TOP + 48, 72, FIELD_HEIGHT - 96);
+    g.strokeRect(FIELD_RIGHT - 72, FIELD_TOP + 48, 72, FIELD_HEIGHT - 96);
+    g.strokeRect(FIELD_LEFT, FIELD_TOP + 78, 26, FIELD_HEIGHT - 156);
+    g.strokeRect(FIELD_RIGHT - 26, FIELD_TOP + 78, 26, FIELD_HEIGHT - 156);
+    for (const lane of ["LEFT", "CENTER", "RIGHT"] as Lane[]) {
+      g.lineStyle(1, 0xecf5ef, 0.16);
       g.beginPath();
-      g.moveTo(pitchX - goalDepth + x, goalY);
-      g.lineTo(pitchX - goalDepth + x, goalY + goalHeight);
-      g.moveTo(pitchX + pitchW + x, goalY);
-      g.lineTo(pitchX + pitchW + x, goalY + goalHeight);
+      g.moveTo(FIELD_LEFT, LANE_Y[lane]);
+      g.lineTo(FIELD_RIGHT, LANE_Y[lane]);
       g.strokePath();
     }
   }
 
-  private pinUiToCamera() {
-    this.hud.setScrollFactor(0);
-    this.perf.setScrollFactor(0);
-    this.handView.setScrollFactor(0);
-    this.activePlayerPanel.setScrollFactor(0);
-    this.tacticalOverlay.setScrollFactor(0);
-    this.feedbackText.setScrollFactor(0);
-    this.aimHintText.setScrollFactor(0);
-    this.helpText.setScrollFactor(0);
-    this.cardDebugText.setScrollFactor(0);
-    this.postMatchBg.setScrollFactor(0);
-    this.postMatchText.setScrollFactor(0);
-    this.postMatchHint.setScrollFactor(0);
+  private xForZone(zone: number) {
+    const cellWidth = FIELD_WIDTH / 7;
+    return FIELD_LEFT + cellWidth * zone + cellWidth / 2;
   }
 
-  private centerCameraOn(x: number, y: number, vx: number, vy: number, instant: boolean) {
-    const cam = this.cameras.main;
-    const maxX = Math.max(0, WORLD_WIDTH - cam.width);
-    const maxY = Math.max(0, WORLD_HEIGHT - cam.height);
-    const lookAheadTimeSec = 0.24;
-    const lookAheadX = Math.abs(vx) < 20 ? 0 : Phaser.Math.Clamp(vx * lookAheadTimeSec, -140, 140);
-    const lookAheadY = Math.abs(vy) < 20 ? 0 : Phaser.Math.Clamp(vy * lookAheadTimeSec, -90, 90);
-    const desiredX = x + lookAheadX;
-    const desiredY = y + lookAheadY;
-
-    let targetX = cam.scrollX;
-    let targetY = cam.scrollY;
-
-    if (instant) {
-      targetX = desiredX - cam.width / 2;
-      targetY = desiredY - cam.height / 2;
-    } else {
-      const deadZoneW = cam.width * 0.3;
-      const deadZoneH = cam.height * 0.24;
-      const dzLeft = cam.scrollX + (cam.width - deadZoneW) / 2;
-      const dzRight = dzLeft + deadZoneW;
-      const dzTop = cam.scrollY + (cam.height - deadZoneH) / 2;
-      const dzBottom = dzTop + deadZoneH;
-
-      if (desiredX < dzLeft) {
-        targetX = desiredX - (cam.width - deadZoneW) / 2;
-      } else if (desiredX > dzRight) {
-        targetX = desiredX - (cam.width + deadZoneW) / 2;
-      }
-
-      if (desiredY < dzTop) {
-        targetY = desiredY - (cam.height - deadZoneH) / 2;
-      } else if (desiredY > dzBottom) {
-        targetY = desiredY - (cam.height + deadZoneH) / 2;
-      }
-    }
-
-    targetX = Phaser.Math.Clamp(targetX, 0, maxX);
-    targetY = Phaser.Math.Clamp(targetY, 0, maxY);
-    const lerp = instant ? 1 : 0.12;
-    cam.scrollX = Phaser.Math.Linear(cam.scrollX, targetX, lerp);
-    cam.scrollY = Phaser.Math.Linear(cam.scrollY, targetY, lerp);
+  private yForLane(lane: Lane) {
+    return LANE_Y[lane];
   }
+}
+
+function formatCardLabel(id: string) {
+  return id.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

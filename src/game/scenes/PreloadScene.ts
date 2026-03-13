@@ -1,5 +1,4 @@
 import Phaser from "phaser";
-import { loadProfile } from "../profile/ProfileStore";
 
 type PixelTextureDef = {
   key: string;
@@ -51,8 +50,6 @@ export class PreloadScene extends Phaser.Scene {
   create() {
     // Fill any missing textures with procedural fallbacks.
     this.generateRuntimeTextures();
-    // Ensure profile exists on first boot.
-    loadProfile();
     this.scene.start("MainMenuScene");
   }
 
