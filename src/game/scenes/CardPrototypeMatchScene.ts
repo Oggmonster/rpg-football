@@ -35,6 +35,11 @@ type TokenView = {
 
 type SelectionMode = "NONE" | "PASS" | "DRIBBLE" | "SHOT";
 type ShotPhase = "IDLE" | "AIM" | "POWER";
+type ResolutionVisualContext = {
+  kind: "PASS" | "SHOT" | "DRIBBLE" | "DEFENSE";
+  actorPlayerId: string | null;
+  targetPlayerId?: string | null;
+};
 
 const VIEW_W = 1280;
 const VIEW_H = 720;
@@ -109,6 +114,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private spotlightPlayerIds = new Set<string>();
   private pendingTrailStyle: { color: number; width: number; arc: number } | null = null;
   private pendingShotSetup: ShotSetupView | null = null;
+  private pendingResolutionContext: ResolutionVisualContext | null = null;
 
   constructor() {
     super("MatchScene");
@@ -460,6 +466,11 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.selectedCardId = cardId;
     if (state.turnMode === "PLAYER_DEFENSE") {
       this.selectionMode = "NONE";
+      this.pendingResolutionContext = {
+        kind: "DEFENSE",
+        actorPlayerId: state.pitchPlayers.find((entry) => entry.hasBall)?.playerId ?? null,
+        targetPlayerId: null,
+      };
       this.startResolution(this.engine.playDefenseCard(cardId));
       return;
     }
@@ -482,11 +493,23 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private onTokenPicked(playerId: string) {
     if (this.animationLocked || this.selectionMode !== "PASS" || !this.selectedCardId) return;
     if (!this.passTargets.has(playerId)) return;
+    const holder = this.engine.getState().pitchPlayers.find((entry) => entry.hasBall);
+    this.pendingResolutionContext = {
+      kind: "PASS",
+      actorPlayerId: holder?.playerId ?? null,
+      targetPlayerId: playerId,
+    };
     this.startResolution(this.engine.playAttackCard(this.selectedCardId, { type: "PASS", targetPlayerId: playerId }));
   }
 
   private onPitchPicked(pointer: Phaser.Input.Pointer) {
     if (this.animationLocked || this.selectionMode !== "DRIBBLE" || !this.selectedCardId) return;
+    const holder = this.engine.getState().pitchPlayers.find((entry) => entry.hasBall);
+    this.pendingResolutionContext = {
+      kind: "DRIBBLE",
+      actorPlayerId: holder?.playerId ?? null,
+      targetPlayerId: null,
+    };
     this.startResolution(
       this.engine.playAttackCard(this.selectedCardId, {
         type: "DRIBBLE",
@@ -517,6 +540,12 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       this.pendingShotSetup = this.shotSetup;
       this.closeShotMiniGame();
       if (cardId) {
+        const holder = this.engine.getState().pitchPlayers.find((entry) => entry.hasBall);
+        this.pendingResolutionContext = {
+          kind: "SHOT",
+          actorPlayerId: holder?.playerId ?? null,
+          targetPlayerId: this.pendingShotSetup?.keeper.playerId ?? null,
+        };
         this.startResolution(this.engine.playAttackCard(cardId, input));
       }
     }
@@ -581,22 +610,23 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.pendingTrailStyle = this.getTrailStyle(result);
     this.cancelSelection();
     this.commentaryText.setText(this.formatCommentary(result.commentary));
-    this.playAnticipation(result);
-    this.time.delayedCall(120, () => {
+    const contactDelay = this.playContactAnimation(result);
+    this.time.delayedCall(contactDelay, () => {
       this.showResultBanner(result);
       this.pulseActionAtBall(result.ball);
       this.punchCamera(result);
       this.refreshUi(false);
     });
-    this.time.delayedCall(210, () => {
+    this.time.delayedCall(contactDelay + 90, () => {
       this.animateImpactPlayers(result);
       this.animateShotContext(result);
     });
-    this.time.delayedCall(900, () => {
+    this.time.delayedCall(contactDelay + 780, () => {
       this.animationLocked = false;
       this.spotlightPlayerIds.clear();
       this.pendingTrailStyle = null;
       this.pendingShotSetup = null;
+      this.pendingResolutionContext = null;
       this.refreshUi(true);
     });
   }
@@ -1160,6 +1190,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private getBallRenderPoint(ball: MatchStateView["ball"]) {
     const baseX = this.xFor(ball.x);
     const baseY = this.yFor(ball.y);
+    if (this.animationLocked && this.pendingTrailStyle) {
+      return { x: baseX, y: baseY };
+    }
     const holder = this.engine.getState().pitchPlayers.find((player) => player.playerId === ball.holderId && player.hasBall);
     if (!holder) {
       return { x: baseX, y: baseY };
@@ -1259,6 +1292,181 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.pitchOffsetY = desiredY;
     this.fieldGfx.setPosition(this.pitchOffsetX, this.pitchOffsetY);
     this.pitchHit.setPosition(this.pitchOffsetX + PITCH_X + PITCH_W / 2, this.pitchOffsetY + PITCH_Y + PITCH_H / 2);
+  }
+
+  private playContactAnimation(result: ActionResolutionView) {
+    const context = this.pendingResolutionContext;
+    if (!context?.actorPlayerId) {
+      this.playAnticipation(result);
+      return 120;
+    }
+
+    if (context.kind === "PASS") {
+      this.animatePassContact(context.actorPlayerId, context.targetPlayerId ?? null);
+      return 170;
+    }
+
+    if (context.kind === "SHOT") {
+      this.animateShotContact(context.actorPlayerId, context.targetPlayerId ?? null);
+      return 190;
+    }
+
+    this.playAnticipation(result);
+    return 120;
+  }
+
+  private animatePassContact(actorPlayerId: string, targetPlayerId: string | null) {
+    const actor = this.tokenViews.get(actorPlayerId);
+    if (!actor) {
+      return;
+    }
+
+    const target = targetPlayerId ? this.tokenViews.get(targetPlayerId) : null;
+    const from = new Phaser.Math.Vector2(actor.sprite.x, actor.sprite.y + 2);
+    const toward = target
+      ? new Phaser.Math.Vector2(target.sprite.x, target.sprite.y + 4).subtract(from).normalize()
+      : new Phaser.Math.Vector2(actor.sprite.flipX ? -1 : 1, 0.12).normalize();
+    const contactPoint = {
+      x: from.x + toward.x * 18,
+      y: from.y + toward.y * 11,
+    };
+
+    this.tweens.add({
+      targets: actor.sprite,
+      x: actor.sprite.x + toward.x * 4,
+      y: actor.sprite.y + toward.y * 2 - 1,
+      angle: toward.x * 2.5,
+      duration: 78,
+      yoyo: true,
+      ease: "Quad.easeOut",
+      onComplete: () => actor.sprite.setAngle(0),
+    });
+    this.tweens.add({
+      targets: actor.shadow,
+      scaleX: 1.12,
+      scaleY: 1,
+      duration: 78,
+      yoyo: true,
+      ease: "Quad.easeOut",
+    });
+
+    if (target) {
+      this.tweens.add({
+        targets: target.sprite,
+        x: target.sprite.x - toward.x * 3,
+        y: target.sprite.y - toward.y * 1.5 - 1,
+        duration: 86,
+        yoyo: true,
+        ease: "Sine.easeOut",
+      });
+      this.tweens.add({
+        targets: target.shadow,
+        scaleX: 1.08,
+        scaleY: 1,
+        duration: 86,
+        yoyo: true,
+        ease: "Sine.easeOut",
+      });
+    }
+
+    this.tweens.add({
+      targets: this.ballMarker,
+      x: contactPoint.x,
+      y: contactPoint.y,
+      duration: 126,
+      ease: "Quad.easeIn",
+    });
+    this.tweens.add({
+      targets: this.ballShadow,
+      x: contactPoint.x,
+      y: contactPoint.y + 5,
+      duration: 126,
+      ease: "Quad.easeIn",
+    });
+    this.spawnContactFlash(contactPoint.x, contactPoint.y, HOME);
+  }
+
+  private animateShotContact(actorPlayerId: string, keeperPlayerId: string | null) {
+    const shooter = this.tokenViews.get(actorPlayerId);
+    if (!shooter) {
+      return;
+    }
+
+    const keeper = keeperPlayerId ? this.tokenViews.get(keeperPlayerId) : null;
+    const goalX = keeper ? keeper.sprite.x : shooter.sprite.x + (shooter.sprite.flipX ? -120 : 120);
+    const goalY = keeper ? keeper.sprite.y : shooter.sprite.y - 8;
+    const from = new Phaser.Math.Vector2(shooter.sprite.x, shooter.sprite.y + 2);
+    const toward = new Phaser.Math.Vector2(goalX, goalY).subtract(from).normalize();
+    const strikePoint = {
+      x: from.x + toward.x * 24,
+      y: from.y + toward.y * 12,
+    };
+
+    this.tweens.add({
+      targets: shooter.sprite,
+      x: shooter.sprite.x + toward.x * 6,
+      y: shooter.sprite.y + toward.y * 2 - 2,
+      angle: toward.x * 3.8,
+      duration: 92,
+      yoyo: true,
+      ease: "Cubic.easeOut",
+      onComplete: () => shooter.sprite.setAngle(0),
+    });
+    this.tweens.add({
+      targets: shooter.shadow,
+      scaleX: 1.18,
+      scaleY: 1,
+      duration: 92,
+      yoyo: true,
+      ease: "Cubic.easeOut",
+    });
+
+    if (keeper) {
+      const keeperShift = keeper.sprite.x < shooter.sprite.x ? 5 : -5;
+      this.tweens.add({
+        targets: [keeper.sprite, keeper.shadow, keeper.ring],
+        x: `+=${keeperShift}`,
+        duration: 86,
+        yoyo: true,
+        ease: "Sine.easeOut",
+      });
+      this.tweens.add({
+        targets: keeper.name,
+        x: `+=${keeperShift}`,
+        duration: 86,
+        yoyo: true,
+        ease: "Sine.easeOut",
+      });
+    }
+
+    this.tweens.add({
+      targets: this.ballMarker,
+      x: strikePoint.x,
+      y: strikePoint.y,
+      duration: 132,
+      ease: "Quad.easeIn",
+    });
+    this.tweens.add({
+      targets: this.ballShadow,
+      x: strikePoint.x,
+      y: strikePoint.y + 5,
+      duration: 132,
+      ease: "Quad.easeIn",
+    });
+    this.spawnContactFlash(strikePoint.x, strikePoint.y, GOLD);
+  }
+
+  private spawnContactFlash(x: number, y: number, color: number) {
+    const flash = this.add.circle(x, y, 5, color, 0.9).setDepth(27);
+    this.tweens.add({
+      targets: flash,
+      scaleX: 2.4,
+      scaleY: 2.4,
+      alpha: 0,
+      duration: 150,
+      ease: "Quad.easeOut",
+      onComplete: () => flash.destroy(),
+    });
   }
 
   private playAnticipation(result: ActionResolutionView) {
