@@ -15,10 +15,17 @@ import {
 type CardButton = {
   bg: Phaser.GameObjects.Rectangle;
   accent: Phaser.GameObjects.Rectangle;
+  tagBg: Phaser.GameObjects.Rectangle;
+  tagText: Phaser.GameObjects.Text;
   title: Phaser.GameObjects.Text;
   meta: Phaser.GameObjects.Text;
   body: Phaser.GameObjects.Text;
   cardId: string | null;
+};
+
+type BadgeView = {
+  bg: Phaser.GameObjects.Rectangle;
+  text: Phaser.GameObjects.Text;
 };
 
 type TokenView = {
@@ -40,6 +47,17 @@ type ResolutionVisualContext = {
   actorPlayerId: string | null;
   targetPlayerId?: string | null;
 };
+type TrailStyle = {
+  color: number;
+  width: number;
+  arc: number;
+};
+type DribblePreviewState = {
+  x: number;
+  y: number;
+  chance: number;
+  radius: number;
+};
 
 const VIEW_W = 1280;
 const VIEW_H = 720;
@@ -59,6 +77,21 @@ const HOME = 0x4ed6cf;
 const AWAY = 0xff9a63;
 const GOLD = 0xf4d06f;
 const LINE = 0xf3f4ec;
+const RESOLVE_TWEEN_MS = 460;
+const RESOLUTION_RECOVERY_MS = 600;
+
+function createMatchSeed() {
+  if (globalThis.crypto?.getRandomValues) {
+    return globalThis.crypto.getRandomValues(new Uint32Array(1))[0];
+  }
+  return Math.floor(Math.random() * 0x1_0000_0000);
+}
+
+declare global {
+  interface Window {
+    render_game_to_text?: () => string;
+  }
+}
 
 export class CardPrototypeMatchScene extends Phaser.Scene {
   private engine!: CardFootballEngine;
@@ -79,7 +112,10 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private ballShadow!: Phaser.GameObjects.Ellipse;
   private ballTrail!: Phaser.GameObjects.Graphics;
   private actionPulse!: Phaser.GameObjects.Arc;
+  private carrierAura!: Phaser.GameObjects.Ellipse;
+  private screenFlash!: Phaser.GameObjects.Rectangle;
   private shotPreviewGfx!: Phaser.GameObjects.Graphics;
+  private pitchOverlayGfx!: Phaser.GameObjects.Graphics;
   private selectionCircle!: Phaser.GameObjects.Arc;
   private dribblePreviewText!: Phaser.GameObjects.Text;
   private tooltipBg!: Phaser.GameObjects.Rectangle;
@@ -87,6 +123,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private resultBanner!: Phaser.GameObjects.Container;
   private resultBannerBg!: Phaser.GameObjects.Rectangle;
   private resultBannerText!: Phaser.GameObjects.Text;
+  private resultBannerSummary!: Phaser.GameObjects.Text;
+  private tooltipTraitBadges: BadgeView[] = [];
+  private resultInsightBadges: BadgeView[] = [];
   private tokenViews = new Map<string, TokenView>();
   private pitchOffsetX = 0;
   private pitchOffsetY = 0;
@@ -108,20 +147,24 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private shotPowerMarker!: Phaser.GameObjects.Rectangle;
   private halftimePanel!: Phaser.GameObjects.Container;
   private fulltimePanel!: Phaser.GameObjects.Container;
+  private modeBadgeBg!: Phaser.GameObjects.Rectangle;
+  private modeBadgeText!: Phaser.GameObjects.Text;
+  private phaseDetailText!: Phaser.GameObjects.Text;
   private animationLocked = false;
   private selectedSubSlot: SlotId | null = null;
   private hoveredPlayerId: string | null = null;
   private spotlightPlayerIds = new Set<string>();
-  private pendingTrailStyle: { color: number; width: number; arc: number } | null = null;
+  private pendingTrailStyle: TrailStyle | null = null;
   private pendingShotSetup: ShotSetupView | null = null;
   private pendingResolutionContext: ResolutionVisualContext | null = null;
+  private dribblePreview: DribblePreviewState | null = null;
 
   constructor() {
     super("MatchScene");
   }
 
   create() {
-    this.engine = new CardFootballEngine({ rngSeed: 1337 });
+    this.engine = new CardFootballEngine({ rngSeed: createMatchSeed() });
     this.cameras.main.setBackgroundColor(BG);
     this.createPitch();
     this.createHud();
@@ -132,10 +175,12 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.createTokens();
     this.bindInput();
     this.refreshUi(true);
+    window.render_game_to_text = () => this.renderGameToText();
   }
 
   update(_time: number, delta: number) {
     this.updateShotMiniGame(delta);
+    this.updateCarrierAura();
   }
 
   private createPitch() {
@@ -143,6 +188,8 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.redrawPitch();
     this.fieldGfx.setPosition(this.pitchOffsetX, this.pitchOffsetY);
     this.pitchHit = this.add.rectangle(PITCH_X + PITCH_W / 2, PITCH_Y + PITCH_H / 2, PITCH_W, PITCH_H, 0x000000, 0.001).setInteractive();
+    this.pitchOverlayGfx = this.add.graphics().setDepth(5);
+    this.carrierAura = this.add.ellipse(0, 0, 48, 20, HOME, 0.04).setStrokeStyle(2, HOME, 0.26).setVisible(false).setDepth(9);
     this.ballTrail = this.add.graphics().setDepth(12);
     this.actionPulse = this.add.circle(0, 0, 28, 0xffffff, 0.16).setVisible(false).setDepth(13);
     this.shotPreviewGfx = this.add.graphics().setDepth(15);
@@ -177,32 +224,44 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       color: "#f7f3e8",
       fontStyle: "italic",
     });
-    this.roundText = this.add.text(936, 18, "", {
+    this.modeBadgeBg = this.add.rectangle(728, 32, 116, 28, 0x143648, 1).setStrokeStyle(1, HOME, 0.95);
+    this.modeBadgeText = this.add.text(728, 32, "", {
       fontFamily: "monospace",
-      fontSize: "15px",
+      fontSize: "13px",
+      color: "#eef8f7",
+      fontStyle: "bold",
+    }).setOrigin(0.5);
+    this.roundText = this.add.text(1234, 16, "", {
+      fontFamily: "monospace",
+      fontSize: "13px",
       color: "#d0e7ef",
-    });
+    }).setOrigin(1, 0);
     this.restartText = this.add.text(560, 42, "", {
       fontFamily: "monospace",
       fontSize: "13px",
       color: "#f0d488",
     });
+    this.phaseDetailText = this.add.text(790, 16, "", {
+      fontFamily: "monospace",
+      fontSize: "10px",
+      color: "#d3e6ef",
+    });
 
-    this.add.text(866, 14, "Pressure", {
+    this.add.text(912, 14, "Pressure", {
       fontFamily: "monospace",
       fontSize: "12px",
       color: "#c9dbe2",
     });
-    this.add.rectangle(860, 34, 110, 10, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
-    this.homePressureBar = this.add.rectangle(860, 34, 1, 10, HOME, 1).setOrigin(0, 0);
-    this.homePressureText = this.add.text(974, 29, "", {
+    this.add.rectangle(906, 34, 110, 10, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
+    this.homePressureBar = this.add.rectangle(906, 34, 1, 10, HOME, 1).setOrigin(0, 0);
+    this.homePressureText = this.add.text(1020, 29, "", {
       fontFamily: "monospace",
       fontSize: "12px",
       color: "#9debea",
     });
-    this.add.rectangle(860, 48, 110, 10, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
-    this.awayPressureBar = this.add.rectangle(860, 48, 1, 10, AWAY, 1).setOrigin(0, 0);
-    this.awayPressureText = this.add.text(974, 43, "", {
+    this.add.rectangle(906, 48, 110, 10, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
+    this.awayPressureBar = this.add.rectangle(906, 48, 1, 10, AWAY, 1).setOrigin(0, 0);
+    this.awayPressureText = this.add.text(1020, 43, "", {
       fontFamily: "monospace",
       fontSize: "12px",
       color: "#ffc3a0",
@@ -234,22 +293,52 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       lineSpacing: 7,
     });
 
-    this.resultBannerBg = this.add.rectangle(VIEW_W / 2, PITCH_Y + 42, 250, 38, 0x07111a, 0.9).setStrokeStyle(2, GOLD, 0.96);
-    this.resultBannerText = this.add.text(VIEW_W / 2, PITCH_Y + 42, "", {
+    this.resultBannerBg = this.add.rectangle(VIEW_W / 2, PITCH_Y + 54, 430, 84, 0x07111a, 0.92).setStrokeStyle(2, GOLD, 0.96);
+    this.resultBannerText = this.add.text(VIEW_W / 2, PITCH_Y + 28, "", {
       fontFamily: "Georgia",
-      fontSize: "18px",
+      fontSize: "22px",
       color: "#f8f1dd",
       fontStyle: "bold",
     }).setOrigin(0.5);
-    this.resultBanner = this.add.container(0, 0, [this.resultBannerBg, this.resultBannerText]).setDepth(28).setVisible(false).setAlpha(0);
+    this.resultBannerSummary = this.add.text(VIEW_W / 2, PITCH_Y + 70, "", {
+      fontFamily: "monospace",
+      fontSize: "12px",
+      color: "#d9ebf2",
+      align: "center",
+      wordWrap: { width: 376 },
+    }).setOrigin(0.5);
+    const resultBadgeChildren: Phaser.GameObjects.GameObject[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      const bg = this.add.rectangle(VIEW_W / 2, PITCH_Y + 51, 74, 20, 0x173041, 1).setVisible(false);
+      const text = this.add.text(VIEW_W / 2, PITCH_Y + 51, "", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#eef8fb",
+        fontStyle: "bold",
+      }).setOrigin(0.5).setVisible(false);
+      this.resultInsightBadges.push({ bg, text });
+      resultBadgeChildren.push(bg, text);
+    }
+    this.resultBanner = this.add.container(0, 0, [this.resultBannerBg, this.resultBannerText, ...resultBadgeChildren, this.resultBannerSummary]).setDepth(28).setVisible(false).setAlpha(0);
+    this.screenFlash = this.add.rectangle(VIEW_W / 2, VIEW_H / 2, VIEW_W, VIEW_H, 0xffffff, 0).setDepth(59).setVisible(false);
 
-    this.tooltipBg = this.add.rectangle(44, TOP_BAR_H + 10, 280, 108, 0x07131d, 0.97).setOrigin(0, 0).setVisible(false).setStrokeStyle(1, 0x6fd7d6, 0.85).setDepth(20);
+    this.tooltipBg = this.add.rectangle(44, TOP_BAR_H + 10, 320, 164, 0x07131d, 0.97).setOrigin(0, 0).setVisible(false).setStrokeStyle(1, 0x6fd7d6, 0.85).setDepth(20);
     this.tooltipText = this.add.text(56, TOP_BAR_H + 22, "", {
       fontFamily: "monospace",
       fontSize: "13px",
       color: "#f1f9fb",
-      wordWrap: { width: 248 },
+      wordWrap: { width: 288 },
     }).setVisible(false).setDepth(21);
+    for (let index = 0; index < 3; index += 1) {
+      const bg = this.add.rectangle(66, TOP_BAR_H + 148, 80, 20, 0x173041, 1).setOrigin(0, 0.5).setVisible(false).setDepth(21);
+      const text = this.add.text(74, TOP_BAR_H + 148, "", {
+        fontFamily: "monospace",
+        fontSize: "11px",
+        color: "#eef8fb",
+        fontStyle: "bold",
+      }).setOrigin(0.5).setVisible(false).setDepth(22);
+      this.tooltipTraitBadges.push({ bg, text });
+    }
   }
 
   private createHand() {
@@ -258,6 +347,13 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       const y = VIEW_H - 154;
       const bg = this.add.rectangle(x, y, 196, 124, 0x183246, 1).setOrigin(0, 0).setStrokeStyle(2, 0x4d7890, 0.9).setInteractive({ useHandCursor: true });
       const accent = this.add.rectangle(x, y, 196, 12, HOME, 1).setOrigin(0, 0);
+      const tagBg = this.add.rectangle(x + 152, y + 26, 34, 18, 0x173041, 1).setOrigin(0.5).setVisible(false);
+      const tagText = this.add.text(x + 152, y + 26, "", {
+        fontFamily: "monospace",
+        fontSize: "10px",
+        color: "#eef8fb",
+        fontStyle: "bold",
+      }).setOrigin(0.5).setVisible(false);
       const title = this.add.text(x + 12, y + 18, "", {
         fontFamily: "Georgia",
         fontSize: "23px",
@@ -279,7 +375,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         const cardId = this.handButtons[index]?.cardId;
         if (cardId) this.onCardPicked(cardId);
       });
-      this.handButtons.push({ bg, accent, title, meta, body, cardId: null });
+      this.handButtons.push({ bg, accent, tagBg, tagText, title, meta, body, cardId: null });
     }
   }
 
@@ -340,28 +436,38 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private bindInput() {
     this.input.keyboard?.on("keydown-ESC", () => this.cancelSelection());
     this.input.keyboard?.on("keydown-SPACE", () => this.onSpacePressed());
+    this.input.keyboard?.on("keydown-ONE", () => this.playCardByIndex(0));
+    this.input.keyboard?.on("keydown-TWO", () => this.playCardByIndex(1));
+    this.input.keyboard?.on("keydown-THREE", () => this.playCardByIndex(2));
     this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => this.updateDribblePreview(pointer));
     this.pitchHit.on("pointerdown", (pointer: Phaser.Input.Pointer) => this.onPitchPicked(pointer));
   }
 
   private refreshUi(instant: boolean) {
     const state = this.engine.getState();
+    const turnAccent = state.turnMode === "PLAYER_ATTACK" ? HOME : state.turnMode === "PLAYER_DEFENSE" ? AWAY : GOLD;
+    const badgeLabel =
+      state.phase === "HALFTIME" ? "HALFTIME" : state.phase === "FULLTIME" ? "FULL TIME" : state.turnMode === "PLAYER_ATTACK" ? "ATTACK" : "DEFEND";
     this.scoreText.setText(`Blackflag City ${state.score.HOME} - ${state.score.AWAY} CPU Athletic`);
     this.phaseText.setText(
       state.phase === "HALFTIME" ? "Halftime" : state.phase === "FULLTIME" ? "Full Time" : state.turnMode === "PLAYER_ATTACK" ? "You Attack" : "You Defend"
     );
-    this.roundText.setText(`Half ${state.half} | Attack rounds ${state.attackRoundsThisHalf.HOME}-${state.attackRoundsThisHalf.AWAY} of 10`);
+    this.modeBadgeBg.setFillStyle(turnAccent, 0.18).setStrokeStyle(1, turnAccent, 0.95);
+    this.modeBadgeText.setText(badgeLabel);
+    this.roundText.setText(`H${state.half}  ${state.attackRoundsThisHalf.HOME}-${state.attackRoundsThisHalf.AWAY}/10`);
     this.restartText.setText(
       state.restart ? `${state.restart.label} | ${state.teams.find((team) => team.id === "HOME")?.playstyle ?? "CONTROL"} vs ${state.teams.find((team) => team.id === "AWAY")?.playstyle ?? "WIDE"}` : `${state.teams.find((team) => team.id === "HOME")?.playstyle ?? "CONTROL"} vs ${state.teams.find((team) => team.id === "AWAY")?.playstyle ?? "WIDE"}`
     );
+    this.phaseDetailText.setText(this.fitPhaseDetail(this.buildPhaseDetail(state)));
     this.homePressureBar.displayWidth = Math.max(2, state.pressure.HOME * 1.1);
     this.awayPressureBar.displayWidth = Math.max(2, state.pressure.AWAY * 1.1);
     this.homePressureText.setText(`HOME ${state.pressure.HOME}`);
     this.awayPressureText.setText(`CPU ${state.pressure.AWAY}`);
     this.promptText.setText(this.buildPrompt(state));
     this.cpuText.setText(state.turnMode === "PLAYER_DEFENSE" && state.cpuPreviewCard ? `CPU card: ${state.cpuPreviewCard.name}\nYou know the move, not the destination.` : "");
-    this.fillHand(state.currentHand, state.turnMode);
+    this.fillHand(state.currentHand, state.turnMode, state);
     this.updatePitchFocus(state.ball, instant);
+    this.renderPitchOverlay(state);
     this.updateTokens(state.pitchPlayers, instant);
     this.updateBall(state.ball, instant);
     this.commentaryText.setText(this.formatCommentary(state.commentaryFeed));
@@ -370,23 +476,41 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.renderFulltime(state);
   }
 
-  private fillHand(cards: MatchCardView[], turnMode: MatchStateView["turnMode"]) {
+  private fillHand(cards: MatchCardView[], turnMode: MatchStateView["turnMode"], state: MatchStateView) {
     this.handButtons.forEach((button, index) => {
       const card = cards[index];
       button.cardId = card?.id ?? null;
       button.bg.setVisible(Boolean(card));
       button.accent.setVisible(Boolean(card));
+      button.tagBg.setVisible(false);
+      button.tagText.setVisible(false);
       button.title.setVisible(Boolean(card));
       button.meta.setVisible(Boolean(card));
       button.body.setVisible(Boolean(card));
       if (!card) return;
       const attackTurn = turnMode === "PLAYER_ATTACK";
+      const selected = this.selectedCardId === card.id;
+      const focusActive = Boolean(this.selectedCardId);
       button.accent.setFillStyle(attackTurn ? HOME : AWAY, 1);
       button.bg.setFillStyle(attackTurn ? 0x173246 : 0x482b22, 1);
-      button.bg.setStrokeStyle(2, this.selectedCardId === card.id ? GOLD : 0x4d7890, 0.95);
+      button.bg.setStrokeStyle(2, selected ? GOLD : 0x4d7890, 0.95);
+      button.bg.setScale(selected ? 1.03 : 1);
+      button.bg.setAlpha(focusActive && !selected ? 0.58 : 1);
+      button.accent.setAlpha(focusActive && !selected ? 0.42 : 1);
+      button.title.setAlpha(focusActive && !selected ? 0.72 : 1);
+      button.meta.setAlpha(focusActive && !selected ? 0.62 : 1);
+      button.body.setAlpha(focusActive && !selected ? 0.62 : 1);
       button.title.setText(card.name);
-      button.meta.setText(`${card.kind}${card.requiredStars > 0 ? ` | ${card.requiredStars}* skill` : ""}${card.radius > 0 ? ` | ${card.radius.toFixed(0)}m` : ""}`);
+      button.meta.setText(`${index + 1} | ${card.kind}${card.requiredStars > 0 ? ` | ${card.requiredStars}* skill` : ""}${card.radius > 0 ? ` | ${card.radius.toFixed(0)}m` : ""}`);
       button.body.setText(card.description);
+      const tag = this.getCardBadge(card, state);
+      if (tag) {
+        const width = Math.max(48, tag.label.length * 7 + 18);
+        button.tagBg.setVisible(true).setDisplaySize(width, 18).setPosition(button.bg.x + 196 - width / 2 - 10, button.bg.y + 28).setFillStyle(tag.color, 0.2).setStrokeStyle(1, tag.color, 0.95);
+        button.tagText.setVisible(true).setText(tag.label).setPosition(button.tagBg.x, button.tagBg.y);
+        button.tagBg.setAlpha(focusActive && !selected ? 0.42 : 1);
+        button.tagText.setAlpha(focusActive && !selected ? 0.7 : 1);
+      }
     });
   }
 
@@ -413,14 +537,17 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         view.name.setPosition(x, y + 31);
         view.chance.setPosition(x, y - 30);
       } else {
-        this.tweens.add({ targets: view.shadow, x, y: y + 11, duration: 620, ease: "Sine.easeOut" });
-        this.tweens.add({ targets: view.ring, x, y: y + 12, duration: 620, ease: "Sine.easeOut" });
-        this.tweens.add({ targets: view.sprite, x, y: y + 2, duration: 620, ease: "Sine.easeOut" });
-        this.tweens.add({ targets: view.name, x, y: y + 31, duration: 620, ease: "Sine.easeOut" });
-        this.tweens.add({ targets: view.chance, x, y: y - 30, duration: 620, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.shadow, x, y: y + 11, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.ring, x, y: y + 12, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.sprite, x, y: y + 2, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.name, x, y: y + 31, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.chance, x, y: y - 30, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
       }
 
       const isTarget = this.passTargets.has(player.playerId);
+      const deemphasize =
+        (this.selectionMode === "PASS" && !player.hasBall && !isTarget) ||
+        (this.selectionMode === "DRIBBLE" && !player.hasBall && !this.spotlightPlayerIds.has(player.playerId));
       view.ring.setVisible(player.hasBall || isTarget || this.spotlightPlayerIds.has(player.playerId));
       view.ring.setFillStyle(player.hasBall ? 0x6de7ff : isTarget ? GOLD : 0xffffff, player.hasBall ? 0.18 : isTarget ? 0.12 : 0.04);
       view.ring.setStrokeStyle(2, player.hasBall ? 0x9ff4ff : isTarget ? GOLD : 0xffffff, player.hasBall || isTarget ? 0.95 : 0.25);
@@ -428,6 +555,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       view.name.setText(player.name);
       view.name.setVisible(activeLabels.has(player.playerId));
       view.name.setAlpha(activeLabels.has(player.playerId) ? 1 : 0);
+      view.shadow.setAlpha(deemphasize ? 0.18 : 0.25);
+      view.sprite.setAlpha(deemphasize ? 0.56 : 1);
+      view.chance.setAlpha(isTarget ? 1 : 0.78);
       const target = this.passTargets.get(player.playerId);
       view.chance.setVisible(Boolean(target));
       view.chance.setText(target ? `${target.chance}%` : "");
@@ -453,8 +583,8 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       return;
     }
     this.drawBallTrail(previousX, previousY, x, y, this.pendingTrailStyle);
-    this.tweens.add({ targets: this.ballMarker, x, y, duration: 620, ease: "Sine.easeOut" });
-    this.tweens.add({ targets: this.ballShadow, x, y: y + 5, duration: 620, ease: "Sine.easeOut" });
+    this.tweens.add({ targets: this.ballMarker, x, y, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+    this.tweens.add({ targets: this.ballShadow, x, y: y + 5, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
   }
 
   private onCardPicked(cardId: string) {
@@ -478,13 +608,16 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     if (card.kind === "PASS") {
       this.selectionMode = "PASS";
       this.passTargets = new Map(this.engine.getPassTargets(cardId).map((target) => [target.playerId, target]));
+      this.dribblePreview = null;
     } else if (card.kind === "DRIBBLE") {
       this.selectionMode = "DRIBBLE";
       this.passTargets.clear();
       this.updateHolderSelectionCircle(card.radius);
+      this.dribblePreview = null;
     } else {
       this.selectionMode = "SHOT";
       this.passTargets.clear();
+      this.dribblePreview = null;
       this.openShotMiniGame(cardId);
     }
     this.refreshUi(true);
@@ -613,15 +746,16 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     const contactDelay = this.playContactAnimation(result);
     this.time.delayedCall(contactDelay, () => {
       this.showResultBanner(result);
-      this.pulseActionAtBall(result.ball);
+      this.pulseActionAtBall(result.ball, this.getResultAccent(result));
       this.punchCamera(result);
+      this.flashScreen(this.getResultAccent(result), result.goalScored ? 0.2 : result.roundEnded ? 0.11 : 0.07, result.goalScored ? 260 : 180);
       this.refreshUi(false);
     });
     this.time.delayedCall(contactDelay + 90, () => {
       this.animateImpactPlayers(result);
       this.animateShotContext(result);
     });
-    this.time.delayedCall(contactDelay + 780, () => {
+    this.time.delayedCall(contactDelay + RESOLUTION_RECOVERY_MS, () => {
       this.animationLocked = false;
       this.spotlightPlayerIds.clear();
       this.pendingTrailStyle = null;
@@ -660,9 +794,16 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private updateDribblePreview(pointer: Phaser.Input.Pointer) {
     if (this.selectionMode !== "DRIBBLE" || !this.selectedCardId) return;
     const preview = this.engine.previewDribble(this.selectedCardId, this.normX(pointer.x), this.normY(pointer.y));
+    this.dribblePreview = {
+      x: pointer.x,
+      y: pointer.y,
+      chance: preview.chance,
+      radius: preview.radius,
+    };
     this.dribblePreviewText.setVisible(true);
     this.dribblePreviewText.setText(`${preview.chance}%`);
     this.dribblePreviewText.setPosition(pointer.x + 18, pointer.y + 18);
+    this.renderPitchOverlay(this.engine.getState());
   }
 
   private showTooltip(playerId: string) {
@@ -671,7 +812,14 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     if (!player) return;
     this.tooltipBg.setVisible(true);
     this.tooltipText.setVisible(true).setText(
-      `${player.name} [${player.slotId}] ${player.hasBall ? "Ball carrier" : ""}\nPAC ${player.stats.pac} SHO ${player.stats.sho} PAS ${player.stats.pas}\nDRI ${player.stats.dri} DEF ${player.stats.def} PHY ${player.stats.phy}\nAgility ${player.stats.agility} | Block ${player.stats.blocking} | Skill ${player.stats.skillStars}*`
+      `${player.name} [${player.slotId}] ${player.hasBall ? "Ball carrier" : ""}\n${player.archetypeName} | ${player.tacticalIdentity}\nPAC ${player.stats.pac} SHO ${player.stats.sho} PAS ${player.stats.pas}\nDRI ${player.stats.dri} DEF ${player.stats.def} PHY ${player.stats.phy}\nAgility ${player.stats.agility} | Block ${player.stats.blocking} | Skill ${player.stats.skillStars}*`
+    );
+    this.layoutBadges(
+      this.tooltipTraitBadges,
+      player.traits.slice(0, 3).map((trait) => ({ label: trait.toUpperCase(), color: HOME })),
+      56,
+      TOP_BAR_H + 148,
+      8
     );
     this.updateTokens(this.engine.getState().pitchPlayers, true);
   }
@@ -680,6 +828,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.hoveredPlayerId = null;
     this.tooltipBg.setVisible(false);
     this.tooltipText.setVisible(false);
+    this.hideBadges(this.tooltipTraitBadges);
     this.updateTokens(this.engine.getState().pitchPlayers, true);
   }
 
@@ -815,24 +964,25 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       return "Match complete. Review the stats or restart.";
     }
     if (state.turnMode === "PLAYER_DEFENSE") {
-      return "The CPU action is revealed. Pick one defensive card to answer it.";
+      return "CPU move revealed. Pick one defensive card.";
     }
     if (this.selectionMode === "PASS") {
-      return "Click a teammate. The number above each player is the estimated pass success chance.";
+      return "Click a teammate. Number = pass chance.";
     }
     if (this.selectionMode === "DRIBBLE") {
-      return "Click inside the gold circle to pick the dribble route.";
+      return "Click inside the gold circle to burst forward.";
     }
     if (this.selectionMode === "SHOT") {
       return "Shot minigame active. Press SPACE once for aim and again for power.";
     }
-    return "Pick one attacking card. Every turn discards the full hand and deals three new cards.";
+    return "Pick one attacking card. Save riskier cards for pressure moments.";
   }
 
   private cancelSelection() {
     this.selectedCardId = null;
     this.selectionMode = "NONE";
     this.passTargets.clear();
+    this.dribblePreview = null;
     this.selectionCircle.setVisible(false);
     this.dribblePreviewText.setVisible(false);
     this.closeShotMiniGame();
@@ -894,6 +1044,211 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     g.fillCircle(PITCH_X + PITCH_W / 2, PITCH_Y + PITCH_H / 2, 4);
     g.fillCircle(PITCH_X + 92, PITCH_Y + PITCH_H / 2, 3);
     g.fillCircle(PITCH_X + PITCH_W - 92, PITCH_Y + PITCH_H / 2, 3);
+  }
+
+  private renderPitchOverlay(state: MatchStateView) {
+    const g = this.pitchOverlayGfx;
+    const accent = state.possessionTeam === "HOME" ? HOME : AWAY;
+    const attacksRight = state.possessionTeam === "HOME";
+    const thirdWidth = PITCH_W * 0.32;
+    const dangerX = attacksRight ? PITCH_X + PITCH_W - thirdWidth : PITCH_X;
+    const boxWidth = 184;
+    const boxX = attacksRight ? PITCH_X + PITCH_W - boxWidth : PITCH_X;
+    const ballPoint = this.getBallRenderPoint(state.ball);
+
+    g.clear();
+    g.fillStyle(accent, 0.05);
+    g.fillRect(dangerX, PITCH_Y, thirdWidth, PITCH_H);
+    g.fillStyle(accent, 0.08);
+    g.fillRect(boxX, PITCH_Y + 72, boxWidth, PITCH_H - 144);
+    g.fillStyle(0xffffff, 0.035);
+    g.fillCircle(ballPoint.x - this.pitchOffsetX, ballPoint.y - this.pitchOffsetY, 34);
+
+    if (this.selectionMode === "PASS" && this.passTargets.size > 0) {
+      for (const target of this.passTargets.values()) {
+        const alpha = Phaser.Math.Clamp(0.2 + target.chance / 160, 0.24, 0.8);
+        g.lineStyle(target.chance >= 70 ? 4 : 3, target.chance >= 70 ? 0xbff8ff : GOLD, alpha);
+        g.beginPath();
+        g.moveTo(ballPoint.x - this.pitchOffsetX, ballPoint.y - this.pitchOffsetY);
+        g.lineTo(this.xFor(target.x) - this.pitchOffsetX, this.yFor(target.y) - this.pitchOffsetY);
+        g.strokePath();
+      }
+    }
+
+    if (this.selectionMode === "DRIBBLE" && this.dribblePreview) {
+      g.lineStyle(3, GOLD, 0.92);
+      g.beginPath();
+      g.moveTo(ballPoint.x - this.pitchOffsetX, ballPoint.y - this.pitchOffsetY);
+      g.lineTo(this.dribblePreview.x - this.pitchOffsetX, this.dribblePreview.y - this.pitchOffsetY);
+      g.strokePath();
+      g.fillStyle(this.dribblePreview.chance >= 65 ? HOME : AWAY, 0.14);
+      g.fillCircle(this.dribblePreview.x - this.pitchOffsetX, this.dribblePreview.y - this.pitchOffsetY, 18);
+      g.lineStyle(2, this.dribblePreview.chance >= 65 ? HOME : AWAY, 0.95);
+      g.strokeCircle(this.dribblePreview.x - this.pitchOffsetX, this.dribblePreview.y - this.pitchOffsetY, 18);
+    }
+  }
+
+  private buildPhaseDetail(state: MatchStateView) {
+    if (state.phase === "HALFTIME") {
+      return "Adjust shape.";
+    }
+    if (state.phase === "FULLTIME") {
+      return "Review the match.";
+    }
+    if (state.turnMode === "PLAYER_DEFENSE") {
+      const selectedCard = this.selectedCardId ? state.currentHand.find((card) => card.id === this.selectedCardId) ?? null : null;
+      if (selectedCard) {
+        const trapLabel = this.getDefenseCardLabel(selectedCard.id);
+        if (trapLabel) {
+          return `Trap ready: ${trapLabel}`;
+        }
+      }
+      return state.cpuPreviewCard ? `Threat: ${state.cpuPreviewCard.name}` : "Protect the lane.";
+    }
+    if (this.selectedCardId) {
+      const selectedCard = state.currentHand.find((card) => card.id === this.selectedCardId) ?? null;
+      if (selectedCard) {
+        const combo = this.engine.getComboPreview(selectedCard.id, "HOME");
+        if (combo) {
+          return `${combo.sourceCardName} -> ${selectedCard.name} +${combo.bonus}`;
+        }
+        const holder = state.pitchPlayers.find((player) => player.playerId === state.ball.holderId) ?? null;
+        const traitHint = holder ? this.getTraitFitInfo(holder, selectedCard)?.detail : null;
+        if (traitHint) {
+          return traitHint;
+        }
+      }
+    }
+    if (state.combo?.teamId === "HOME") {
+      return `Rhythm: ${state.combo.lastCardName} x${state.combo.chain}`;
+    }
+    if (this.selectionMode === "PASS") {
+      return "Safe lanes glow.";
+    }
+    if (this.selectionMode === "DRIBBLE") {
+      return "Gold radius = burst.";
+    }
+    if (this.selectionMode === "SHOT") {
+      return "SPACE: aim, then power.";
+    }
+    return "Read shape.";
+  }
+
+  private fitPhaseDetail(text: string) {
+    return text.length <= 18 ? text : `${text.slice(0, 17)}…`;
+  }
+
+  private playCardByIndex(index: number) {
+    const cardId = this.handButtons[index]?.cardId;
+    if (cardId) {
+      this.onCardPicked(cardId);
+    }
+  }
+
+  private renderGameToText() {
+    const state = this.engine.getState();
+    const lastResolution = this.engine.getLastResolution();
+    return JSON.stringify({
+      mode: state.phase,
+      turnMode: state.turnMode,
+      score: state.score,
+      half: state.half,
+      attackRoundsThisHalf: state.attackRoundsThisHalf,
+      ball: state.ball,
+      selectedCardId: this.selectedCardId,
+      selectionMode: this.selectionMode,
+      cpuPreviewCard: state.cpuPreviewCard?.name ?? null,
+      combo: state.combo,
+      lastResolution: lastResolution
+        ? {
+            title: lastResolution.title,
+            summary: lastResolution.summary,
+            insights: lastResolution.insights,
+          }
+        : null,
+      hand: state.currentHand.map((card) => ({ id: card.id, name: card.name, kind: card.kind })),
+      passTargets: Array.from(this.passTargets.values()).map((target) => ({
+        playerId: target.playerId,
+        name: target.name,
+        chance: target.chance,
+        x: target.x,
+        y: target.y,
+      })),
+    });
+  }
+
+  private getCardBadge(card: MatchCardView, state: MatchStateView) {
+    if (state.turnMode === "PLAYER_ATTACK") {
+      const combo = this.engine.getComboPreview(card.id, "HOME");
+      if (combo) {
+        return { label: `COMBO +${combo.bonus}`, color: GOLD };
+      }
+      const holder = state.pitchPlayers.find((player) => player.playerId === state.ball.holderId) ?? null;
+      const trait = holder ? this.getTraitFitInfo(holder, card) : null;
+      if (trait) {
+        return { label: trait.label, color: HOME };
+      }
+      return null;
+    }
+    const trapLabel = this.getDefenseCardLabel(card.id);
+    if (!trapLabel) {
+      return null;
+    }
+    return { label: trapLabel.toUpperCase(), color: AWAY };
+  }
+
+  private getDefenseCardLabel(cardId: string) {
+    switch (cardId) {
+      case "PRESS_TRAP":
+        return "Trap";
+      case "TRACK_RUNNER":
+        return "Track";
+      case "DOUBLE_TEAM":
+      case "DOUBLE_PRESS":
+        return "Swarm";
+      case "PROTECT_MIDDLE":
+        return "Block";
+      default:
+        return null;
+    }
+  }
+
+  private getTraitFitInfo(player: PitchPlayerView, card: MatchCardView) {
+    const tags = `${player.archetypeName} ${player.tacticalIdentity} ${player.traits.join(" ")}`.toLowerCase();
+    if (card.kind === "PASS" && /(playmaker|creator|distributor|quarterback|crosser|winger|fullback|link-up)/.test(tags)) {
+      return { label: "PLAYMAKER", detail: `${player.name} can weight this pass.` };
+    }
+    if (card.kind === "DRIBBLE" && /(press-resistant|ball magnet|inside cutter|speedster|touchline runner|engine|calm under pressure)/.test(tags)) {
+      return { label: "1V1 FIT", detail: `${player.name} suits this carry.` };
+    }
+    if (card.kind === "SHOT" && /(poacher|finisher|shadow striker|target man|false nine|long shot|fox in the box)/.test(tags)) {
+      return { label: "FINISHER", detail: `${player.name} has the profile for this finish.` };
+    }
+    return null;
+  }
+
+  private layoutBadges(badges: BadgeView[], specs: Array<{ label: string; color: number }>, startX: number, y: number, gap: number) {
+    let x = startX;
+    badges.forEach((badge, index) => {
+      const spec = specs[index];
+      if (!spec) {
+        badge.bg.setVisible(false);
+        badge.text.setVisible(false);
+        return;
+      }
+      badge.text.setText(spec.label);
+      const width = Math.max(54, badge.text.width + 16);
+      badge.bg.setVisible(true).setDisplaySize(width, 20).setPosition(x + width / 2, y).setFillStyle(spec.color, 0.22).setStrokeStyle(1, spec.color, 0.95);
+      badge.text.setVisible(true).setPosition(x + width / 2, y);
+      x += width + gap;
+    });
+  }
+
+  private hideBadges(badges: BadgeView[]) {
+    badges.forEach((badge) => {
+      badge.bg.setVisible(false);
+      badge.text.setVisible(false);
+    });
   }
 
   private getActiveLabelPlayerIds(players: PitchPlayerView[]) {
@@ -996,28 +1351,16 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     );
   }
 
-  private drawBallTrail(fromX: number, fromY: number, toX: number, toY: number, style: { color: number; width: number; arc: number } | null) {
+  private drawBallTrail(fromX: number, fromY: number, toX: number, toY: number, style: TrailStyle | null) {
     if (Math.hypot(toX - fromX, toY - fromY) < 10) {
       return;
     }
     const trail = style ?? { color: 0xf5f0c8, width: 4, arc: 0 };
     this.ballTrail.clear();
-    this.ballTrail.lineStyle(trail.width, trail.color, 0.95);
-    this.ballTrail.beginPath();
-    this.ballTrail.moveTo(fromX, fromY);
-    if (trail.arc > 0) {
-      const midX = (fromX + toX) / 2;
-      const midY = (fromY + toY) / 2 - trail.arc;
-      for (let step = 1; step <= 12; step += 1) {
-        const t = step / 12;
-        const curveX = (1 - t) * (1 - t) * fromX + 2 * (1 - t) * t * midX + t * t * toX;
-        const curveY = (1 - t) * (1 - t) * fromY + 2 * (1 - t) * t * midY + t * t * toY;
-        this.ballTrail.lineTo(curveX, curveY);
-      }
-    } else {
-      this.ballTrail.lineTo(toX, toY);
-    }
-    this.ballTrail.strokePath();
+    this.renderTrailPath(this.ballTrail, fromX, fromY, toX, toY, trail.arc, trail.width + 6, trail.color, 0.16);
+    this.renderTrailPath(this.ballTrail, fromX, fromY, toX, toY, trail.arc, trail.width + 2, trail.color, 0.34);
+    this.renderTrailPath(this.ballTrail, fromX, fromY, toX, toY, trail.arc, trail.width, trail.color, 0.96);
+    this.renderTrailPath(this.ballTrail, fromX, fromY, toX, toY, trail.arc, Math.max(1, trail.width - 2), 0xf7f7f1, 0.75);
     this.ballTrail.setAlpha(0.95);
     this.tweens.add({
       targets: this.ballTrail,
@@ -1026,53 +1369,120 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       ease: "Sine.easeOut",
       onComplete: () => this.ballTrail.clear(),
     });
+    this.spawnImpactBurst(toX, toY, trail.color, trail.arc > 0 ? 8 : 5, trail.arc > 0 ? 22 : 12);
+  }
+
+  private renderTrailPath(
+    gfx: Phaser.GameObjects.Graphics,
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    arc: number,
+    width: number,
+    color: number,
+    alpha: number
+  ) {
+    gfx.lineStyle(width, color, alpha);
+    gfx.beginPath();
+    gfx.moveTo(fromX, fromY);
+    if (arc > 0) {
+      const midX = (fromX + toX) / 2;
+      const midY = (fromY + toY) / 2 - arc;
+      for (let step = 1; step <= 12; step += 1) {
+        const t = step / 12;
+        const curveX = (1 - t) * (1 - t) * fromX + 2 * (1 - t) * t * midX + t * t * toX;
+        const curveY = (1 - t) * (1 - t) * fromY + 2 * (1 - t) * t * midY + t * t * toY;
+        gfx.lineTo(curveX, curveY);
+      }
+    } else {
+      gfx.lineTo(toX, toY);
+    }
+    gfx.strokePath();
   }
 
   private getTrailStyle(result: ActionResolutionView) {
-    const kind = result.attackingCard?.kind;
-    if (kind === "SHOT") {
-      return { color: GOLD, width: 5, arc: 34 };
+    const card = result.attackingCard;
+    if (!card) {
+      return null;
     }
-    if (kind === "PASS") {
-      return { color: 0xdff7ff, width: 4, arc: result.title.toLowerCase().includes("intercept") ? 10 : 16 };
+
+    if (card.kind === "SHOT") {
+      if (card.id === "PLACED_SHOT") {
+        return { color: GOLD, width: 6, arc: 16 };
+      }
+      return { color: GOLD, width: 7, arc: 0 };
     }
-    if (kind === "DRIBBLE") {
-      return { color: 0xc8f7d1, width: 3, arc: 0 };
+    if (card.kind === "PASS") {
+      switch (card.id) {
+        case "CROSS":
+          return { color: 0xdff7ff, width: 5, arc: 30 };
+        case "SWITCH_PLAY":
+          return { color: 0xdff7ff, width: 5, arc: 16 };
+        case "THREAD_PASS":
+        case "THROUGH_BALL":
+        case "OVERLAP_RUN":
+          return { color: 0xdff7ff, width: 4, arc: 8 };
+        case "SHORT_PASS":
+        case "ONE_TWO":
+        case "HOLD_UP_PLAY":
+          return { color: 0xdff7ff, width: 4, arc: 0 };
+        default:
+          return { color: 0xdff7ff, width: 4, arc: result.title.toLowerCase().includes("intercept") ? 6 : 0 };
+      }
+    }
+    if (card.kind === "DRIBBLE") {
+      return { color: 0xc8f7d1, width: 4, arc: 0 };
     }
     return null;
   }
 
   private showResultBanner(result: ActionResolutionView) {
     const accent = this.getResultAccent(result);
+    const tags = [
+      result.insights.combo ? { label: "COMBO", color: GOLD } : null,
+      result.insights.trait ? { label: "TRAIT FIT", color: HOME } : null,
+      result.insights.trap ? { label: "TRAP", color: AWAY } : null,
+    ].filter(Boolean) as Array<{ label: string; color: number }>;
     this.resultBannerBg.setStrokeStyle(2, accent, 0.98);
+    this.resultBannerBg.setFillStyle(0x07111a, result.goalScored ? 0.96 : 0.92);
     this.resultBannerText.setColor(Phaser.Display.Color.IntegerToColor(accent).rgba);
     this.resultBannerText.setText(result.title.toUpperCase());
+    this.resultBannerSummary.setColor(result.goalScored ? "#fff2c4" : "#d9ebf2");
+    this.resultBannerSummary.setY(PITCH_Y + (tags.length > 0 ? 70 : 60));
+    this.resultBannerSummary.setText(result.summary);
+    this.layoutBadges(this.resultInsightBadges, tags, VIEW_W / 2 - 116, PITCH_Y + 50, 10);
     this.resultBanner.setVisible(true).setAlpha(0);
-    this.resultBanner.setScale(0.9);
+    this.resultBanner.setScale(result.goalScored ? 0.84 : 0.9);
     this.tweens.killTweensOf(this.resultBanner);
     this.tweens.add({
       targets: this.resultBanner,
       alpha: 1,
       scaleX: 1,
       scaleY: 1,
-      duration: 120,
+      duration: result.goalScored ? 150 : 120,
       ease: "Back.easeOut",
       yoyo: false,
     });
-    this.time.delayedCall(560, () => {
+    this.time.delayedCall(result.goalScored ? 620 : 420, () => {
       this.tweens.add({
         targets: this.resultBanner,
         alpha: 0,
         scaleX: 0.96,
         scaleY: 0.96,
-        duration: 180,
-        onComplete: () => this.resultBanner.setVisible(false),
+        duration: 160,
+        onComplete: () => {
+          this.resultBanner.setVisible(false);
+          this.hideBadges(this.resultInsightBadges);
+        },
       });
     });
   }
 
-  private pulseActionAtBall(ball: MatchStateView["ball"]) {
+  private pulseActionAtBall(ball: MatchStateView["ball"], color = 0xffffff) {
     const { x, y } = this.getBallRenderPoint(ball);
+    this.actionPulse.setFillStyle(color, 0.2);
+    this.actionPulse.setStrokeStyle(2, color, 0.95);
     this.actionPulse.setPosition(x, y).setScale(0.44).setAlpha(0.22).setVisible(true);
     this.tweens.killTweensOf(this.actionPulse);
     this.tweens.add({
@@ -1084,6 +1494,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       ease: "Quad.easeOut",
       onComplete: () => this.actionPulse.setVisible(false),
     });
+    this.spawnImpactBurst(x, y, color, 8, 24);
   }
 
   private animateImpactPlayers(result: ActionResolutionView) {
@@ -1110,6 +1521,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         yoyo: true,
         ease: "Sine.easeOut",
       });
+      this.spawnImpactBurst(token.sprite.x, token.sprite.y + 2, accent, result.goalScored ? 12 : 7, result.goalScored ? 34 : 20);
     }
   }
 
@@ -1158,7 +1570,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         : result.title.toLowerCase().includes("save")
           ? this.yFor(this.pendingShotSetup.keeper.y)
           : this.yFor(this.pendingShotSetup.keeper.y < 32 ? 18 : 46);
-    this.drawBallTrail(this.xFor(shooter.x), this.yFor(shooter.y), goalMouthX, goalMouthY, { color: GOLD, width: 5, arc: 40 });
+    const shotTrail = this.getTrailStyle(result) ?? { color: GOLD, width: 5, arc: 0 };
+    this.drawBallTrail(this.xFor(shooter.x), this.yFor(shooter.y), goalMouthX, goalMouthY, shotTrail);
+    this.spawnGoalMouthFlash(goalMouthX, goalMouthY, this.getResultAccent(result), result.goalScored ? 1 : 0.72);
   }
 
   private punchCamera(result: ActionResolutionView) {
@@ -1175,6 +1589,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
 
   private getResultAccent(result: ActionResolutionView) {
     if (result.goalScored) return GOLD;
+    if (result.title.toLowerCase().includes("rebound") || result.title.toLowerCase().includes("spilled")) return 0xffd37b;
     if (result.title.toLowerCase().includes("intercept") || result.title.toLowerCase().includes("tackle")) return 0xff9a63;
     if (result.title.toLowerCase().includes("save") || result.title.toLowerCase().includes("saved")) return 0x67cbd0;
     return 0xc8f7d1;
@@ -1291,7 +1706,30 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.pitchOffsetX = desiredX;
     this.pitchOffsetY = desiredY;
     this.fieldGfx.setPosition(this.pitchOffsetX, this.pitchOffsetY);
+    this.pitchOverlayGfx.setPosition(this.pitchOffsetX, this.pitchOffsetY);
     this.pitchHit.setPosition(this.pitchOffsetX + PITCH_X + PITCH_W / 2, this.pitchOffsetY + PITCH_Y + PITCH_H / 2);
+  }
+
+  private updateCarrierAura() {
+    const holder = this.engine.getState().pitchPlayers.find((player) => player.hasBall);
+    if (!holder) {
+      this.carrierAura.setVisible(false);
+      return;
+    }
+    const token = this.tokenViews.get(holder.playerId);
+    if (!token) {
+      this.carrierAura.setVisible(false);
+      return;
+    }
+    const accent = holder.teamId === "HOME" ? HOME : AWAY;
+    const pulse = 1 + Math.sin(this.time.now * 0.012) * 0.05;
+    this.carrierAura
+      .setVisible(true)
+      .setPosition(token.shadow.x, token.shadow.y + 1)
+      .setFillStyle(accent, 0.05)
+      .setStrokeStyle(2, accent, 0.32)
+      .setScale(pulse, pulse * 0.9)
+      .setAlpha(this.animationLocked ? 0.68 : 0.46);
   }
 
   private playContactAnimation(result: ActionResolutionView) {
@@ -1467,6 +1905,53 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       ease: "Quad.easeOut",
       onComplete: () => flash.destroy(),
     });
+    this.spawnImpactBurst(x, y, color, 6, 18);
+  }
+
+  private spawnImpactBurst(x: number, y: number, color: number, count: number, spread: number) {
+    for (let index = 0; index < count; index += 1) {
+      const angle = (Math.PI * 2 * index) / count + Phaser.Math.FloatBetween(-0.24, 0.24);
+      const distance = Phaser.Math.FloatBetween(spread * 0.4, spread);
+      const shard = this.add.rectangle(x, y, 3, 3, color, 0.88).setDepth(26);
+      shard.rotation = angle;
+      this.tweens.add({
+        targets: shard,
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
+        alpha: 0,
+        scaleX: 0.4,
+        scaleY: 0.4,
+        duration: 180,
+        ease: "Quad.easeOut",
+        onComplete: () => shard.destroy(),
+      });
+    }
+  }
+
+  private spawnGoalMouthFlash(x: number, y: number, color: number, intensity: number) {
+    const flash = this.add.rectangle(x, y, 46, 92, color, 0.1 * intensity).setDepth(24);
+    flash.setStrokeStyle(2, color, 0.85 * intensity);
+    this.tweens.add({
+      targets: flash,
+      scaleX: 1.6,
+      scaleY: 1.08,
+      alpha: 0,
+      duration: 220,
+      ease: "Quad.easeOut",
+      onComplete: () => flash.destroy(),
+    });
+  }
+
+  private flashScreen(color: number, alpha: number, duration: number) {
+    this.screenFlash.setFillStyle(color, alpha).setAlpha(alpha).setVisible(true);
+    this.tweens.killTweensOf(this.screenFlash);
+    this.tweens.add({
+      targets: this.screenFlash,
+      alpha: 0,
+      duration,
+      ease: "Quad.easeOut",
+      onComplete: () => this.screenFlash.setVisible(false),
+    });
   }
 
   private playAnticipation(result: ActionResolutionView) {
@@ -1489,6 +1974,12 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         yoyo: true,
         ease: "Quad.easeOut",
       });
+    }
+    if (anticipationIds.length > 0) {
+      const anchor = this.tokenViews.get(anticipationIds[0]);
+      if (anchor) {
+        this.spawnImpactBurst(anchor.sprite.x, anchor.sprite.y + 2, this.getResultAccent(result), 5, 14);
+      }
     }
   }
 }

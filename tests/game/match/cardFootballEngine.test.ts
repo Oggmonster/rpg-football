@@ -53,6 +53,118 @@ describe("CardFootballEngine", () => {
     expect(awayNames.some((name) => homeNames.has(name))).toBe(false);
   });
 
+  test("different seeds can produce either team on the opening kickoff", () => {
+    const kickoffTeams = new Set(
+      Array.from({ length: 16 }, (_, index) => new CardFootballEngine({ rngSeed: index + 1 }).getState().kickoffTeamFirstHalf)
+    );
+
+    expect(kickoffTeams.has("HOME")).toBe(true);
+    expect(kickoffTeams.has("AWAY")).toBe(true);
+  });
+
+  test("combo context rewards a one-two flowing into a shot", () => {
+    const engine = new CardFootballEngine({ rngSeed: 91 }) as unknown as {
+      state: { comboState: { teamId: "HOME" | "AWAY"; lastCardId: string; chain: number } | null };
+      getComboContext: (teamId: "HOME" | "AWAY", cardId: string) => { bonus: number; line: string | null };
+    };
+
+    engine.state.comboState = { teamId: "HOME", lastCardId: "ONE_TWO", chain: 1 };
+
+    const combo = engine.getComboContext("HOME", "PLACED_SHOT");
+    expect(combo.bonus).toBeGreaterThan(0);
+    expect(combo.line).toMatch(/give-and-go|lane/i);
+  });
+
+  test("active combo state is exposed to the HUD with a matching preview", () => {
+    const engine = new CardFootballEngine({ rngSeed: 94 }) as unknown as CardFootballEngine & {
+      state: { comboState: { teamId: "HOME" | "AWAY"; lastCardId: string; chain: number } | null };
+    };
+
+    engine.state.comboState = { teamId: "HOME", lastCardId: "ONE_TWO", chain: 2 };
+
+    const state = engine.getState();
+    const preview = engine.getComboPreview("PLACED_SHOT", "HOME");
+
+    expect(state.combo?.lastCardId).toBe("ONE_TWO");
+    expect(state.combo?.lastCardName).toBe("One-Two");
+    expect(state.combo?.chain).toBe(2);
+    expect(preview?.sourceCardName).toBe("One-Two");
+    expect(preview?.bonus).toBeGreaterThan(0);
+  });
+
+  test("trait context rewards creative passers finding runners", () => {
+    const engine = new CardFootballEngine({ rngSeed: 92 }) as unknown as {
+      getPassTraitContext: (
+        passer: Record<string, unknown>,
+        target: Record<string, unknown>,
+        card: { id: string }
+      ) => { bonus: number; line: string | null };
+    };
+
+    const passer = {
+      name: "N. Reeves",
+      archetypeName: "Classic Playmaker",
+      tacticalIdentity: "CONTROL",
+      traits: ["Creator", "Through-Ball Expert"],
+    };
+    const target = {
+      name: "D. Osei",
+      archetypeName: "Speedster",
+      tacticalIdentity: "COUNTER",
+      traits: ["Counter Attack Specialist", "Wide Runner"],
+    };
+
+    const context = engine.getPassTraitContext(passer, target, { id: "THROUGH_BALL" });
+    expect(context.bonus).toBeGreaterThanOrEqual(8);
+    expect(context.line).toMatch(/sharpen|reads the run|half-step/i);
+  });
+
+  test("press trap and double team expose distinct trap bonuses", () => {
+    const engine = new CardFootballEngine({ rngSeed: 93 }) as unknown as {
+      getPassTrapContext: (
+        defendingCard: { id: string },
+        attackingCard: { id: string },
+        pressure: Array<{ player: Record<string, unknown>; proximity: number }>,
+        target: Record<string, unknown>,
+        passDistance: number
+      ) => { penalty: number; title: string | null; interceptor: Record<string, unknown> | null };
+      getDribbleTrapContext: (
+        defendingCard: { id: string },
+        pressure: Array<{ player: Record<string, unknown>; proximity: number }>,
+        holder: Record<string, unknown>
+      ) => { penalty: number; cleanWindowBonus: number; title: string | null };
+    };
+
+    const pressure = [
+      {
+        player: {
+          name: "C. Duval",
+          archetypeName: "Destroyer",
+          tacticalIdentity: "PRESS",
+          traits: ["Enforcer", "Pressing Monster"],
+          x: 48,
+          y: 31,
+        },
+        proximity: 1.1,
+      },
+    ];
+    const passTrap = engine.getPassTrapContext(
+      { id: "PRESS_TRAP" },
+      { id: "THREAD_PASS" },
+      pressure,
+      { name: "Runner", x: 55, y: 30 },
+      20
+    );
+    const dribbleTrap = engine.getDribbleTrapContext({ id: "DOUBLE_TEAM" }, pressure, { name: "Carrier", x: 50, y: 32 });
+
+    expect(passTrap.penalty).toBeGreaterThan(0);
+    expect(passTrap.title).toBe("Trap Sprung");
+    expect(passTrap.interceptor?.name).toBe("C. Duval");
+    expect(dribbleTrap.penalty).toBeGreaterThan(0);
+    expect(dribbleTrap.cleanWindowBonus).toBeGreaterThan(0);
+    expect(dribbleTrap.title).toBe("Swarmed");
+  });
+
   test("resolves turns and immediately prepares the next three-card hand", () => {
     const engine = new CardFootballEngine({ rngSeed: 8, kickoffTeamFirstHalf: "HOME" });
 

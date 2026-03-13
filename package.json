@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "rpg-football",
   "private": true,
   "version": "0.0.0",
@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "eslint": "^10.0.0",
+    "playwright": "^1.58.2",
     "prettier": "^3.8.1",
     "typescript": "~5.9.3",
     "vite": "^7.2.4",
