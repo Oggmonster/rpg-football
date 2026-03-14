@@ -31,13 +31,14 @@ type BadgeView = {
 type TokenView = {
   shadow: Phaser.GameObjects.Ellipse;
   ring: Phaser.GameObjects.Ellipse;
-  sprite: Phaser.GameObjects.Sprite;
+  body: Phaser.GameObjects.Ellipse;
+  trim: Phaser.GameObjects.Ellipse;
+  marker: Phaser.GameObjects.Text;
   name: Phaser.GameObjects.Text;
   chance: Phaser.GameObjects.Text;
   playerId: string;
   lastX: number;
   lastY: number;
-  baseScale: number;
 };
 
 type SelectionMode = "NONE" | "PASS" | "DRIBBLE" | "SHOT";
@@ -62,7 +63,6 @@ type DribblePreviewState = {
 const VIEW_W = 1280;
 const VIEW_H = 720;
 const TOP_BAR_H = 64;
-const BOTTOM_PANEL_H = 174;
 const PITCH_X = 38;
 const PITCH_Y = 82;
 const PITCH_W = 1204;
@@ -70,7 +70,6 @@ const PITCH_H = 446;
 
 const BG = 0x081017;
 const PANEL = 0x0a1822;
-const PANEL_ALT = 0x112535;
 const GRASS_A = 0x236447;
 const GRASS_B = 0x2b7352;
 const HOME = 0x4ed6cf;
@@ -212,26 +211,25 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
 
   private createHud() {
     this.add.rectangle(VIEW_W / 2, TOP_BAR_H / 2, VIEW_W - 24, TOP_BAR_H - 18, PANEL, 0.98).setStrokeStyle(1, 0x31556d, 0.85);
-    this.add.rectangle(VIEW_W / 2, VIEW_H - BOTTOM_PANEL_H / 2, VIEW_W - 24, BOTTOM_PANEL_H - 10, PANEL, 0.98).setStrokeStyle(1, 0x31556d, 0.85);
-    this.add.rectangle(174, VIEW_H - BOTTOM_PANEL_H / 2, 264, BOTTOM_PANEL_H - 38, PANEL_ALT, 0.98).setStrokeStyle(1, 0x406986, 0.75);
-    this.add.rectangle(VIEW_W - 174, VIEW_H - BOTTOM_PANEL_H / 2, 268, BOTTOM_PANEL_H - 38, PANEL_ALT, 0.98).setStrokeStyle(1, 0x406986, 0.75);
+    this.add.rectangle(VIEW_W / 2, VIEW_H - 74, VIEW_W - 24, 126, 0x0a1420, 0.96).setStrokeStyle(2, 0x35586f, 0.88);
+    this.add.rectangle(VIEW_W / 2, VIEW_H - 136, VIEW_W - 120, 34, 0x0c1b29, 0.92).setStrokeStyle(1, 0x31556d, 0.7);
 
     this.scoreText = this.add.text(32, 14, "", {
       fontFamily: "Georgia",
-      fontSize: "30px",
+      fontSize: "26px",
       color: "#f7f3e8",
       fontStyle: "bold",
     });
-    this.phaseText = this.add.text(560, 14, "", {
+    this.phaseText = this.add.text(500, 14, "", {
       fontFamily: "Georgia",
-      fontSize: "28px",
+      fontSize: "24px",
       color: "#f7f3e8",
       fontStyle: "italic",
     });
-    this.modeBadgeBg = this.add.rectangle(728, 32, 116, 28, 0x143648, 1).setStrokeStyle(1, HOME, 0.95);
-    this.modeBadgeText = this.add.text(728, 32, "", {
+    this.modeBadgeBg = this.add.rectangle(670, 31, 94, 24, 0x143648, 1).setStrokeStyle(1, HOME, 0.95);
+    this.modeBadgeText = this.add.text(670, 31, "", {
       fontFamily: "monospace",
-      fontSize: "13px",
+      fontSize: "12px",
       color: "#eef8f7",
       fontStyle: "bold",
     }).setOrigin(0.5);
@@ -240,80 +238,81 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       fontSize: "13px",
       color: "#d0e7ef",
     }).setOrigin(1, 0);
-    this.restartText = this.add.text(560, 42, "", {
-      fontFamily: "monospace",
-      fontSize: "13px",
-      color: "#f0d488",
-    });
-    this.phaseDetailText = this.add.text(790, 16, "", {
+    this.restartText = this.add.text(500, 41, "", {
       fontFamily: "monospace",
       fontSize: "12px",
+      color: "#f0d488",
+    });
+    this.phaseDetailText = this.add.text(752, 16, "", {
+      fontFamily: "monospace",
+      fontSize: "11px",
       color: "#d3e6ef",
     });
 
-    this.add.text(912, 14, "Pressure", {
+    this.add.text(930, 14, "Pressure", {
       fontFamily: "monospace",
       fontSize: "12px",
       color: "#c9dbe2",
     });
-    this.add.rectangle(906, 34, 110, 10, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
-    this.homePressureBar = this.add.rectangle(906, 34, 1, 10, HOME, 1).setOrigin(0, 0);
-    this.homePressureText = this.add.text(1020, 29, "", {
+    this.add.rectangle(930, 34, 92, 9, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
+    this.homePressureBar = this.add.rectangle(930, 34, 1, 9, HOME, 1).setOrigin(0, 0);
+    this.homePressureText = this.add.text(1028, 28, "", {
       fontFamily: "monospace",
-      fontSize: "12px",
+      fontSize: "11px",
       color: "#9debea",
     });
-    this.add.rectangle(906, 48, 110, 10, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
-    this.awayPressureBar = this.add.rectangle(906, 48, 1, 10, AWAY, 1).setOrigin(0, 0);
-    this.awayPressureText = this.add.text(1020, 43, "", {
+    this.add.rectangle(930, 47, 92, 9, 0x173041, 1).setOrigin(0, 0).setStrokeStyle(1, 0x31556d, 0.9);
+    this.awayPressureBar = this.add.rectangle(930, 47, 1, 9, AWAY, 1).setOrigin(0, 0);
+    this.awayPressureText = this.add.text(1028, 41, "", {
       fontFamily: "monospace",
-      fontSize: "12px",
+      fontSize: "11px",
       color: "#ffc3a0",
     });
 
-    this.promptText = this.add.text(52, VIEW_H - 156, "", {
+    this.cpuText = this.add.text(60, VIEW_H - 148, "", {
       fontFamily: "monospace",
-      fontSize: "15px",
-      color: "#f8e5a3",
-      wordWrap: { width: 400 },
-    });
-    this.cpuText = this.add.text(52, VIEW_H - 82, "", {
-      fontFamily: "monospace",
-      fontSize: "13px",
+      fontSize: "12px",
       color: "#ffd3b3",
-      wordWrap: { width: 400 },
+      wordWrap: { width: 220 },
     });
-    this.add.text(VIEW_W - 296, VIEW_H - 162, "Commentary", {
+    this.promptText = this.add.text(VIEW_W / 2, VIEW_H - 149, "", {
       fontFamily: "Georgia",
-      fontSize: "18px",
+      fontSize: "17px",
+      color: "#f8e5a3",
+      fontStyle: "bold",
+      wordWrap: { width: 520 },
+      align: "center",
+    }).setOrigin(0.5, 0);
+    this.add.text(VIEW_W - 286, VIEW_H - 150, "Latest", {
+      fontFamily: "Georgia",
+      fontSize: "15px",
       color: "#d9e4ea",
       fontStyle: "italic",
     });
-    this.commentaryText = this.add.text(VIEW_W - 296, VIEW_H - 126, "", {
+    this.commentaryText = this.add.text(VIEW_W - 286, VIEW_H - 127, "", {
       fontFamily: "monospace",
-      fontSize: "14px",
+      fontSize: "12px",
       color: "#eff5f8",
-      wordWrap: { width: 232 },
-      lineSpacing: 3,
+      wordWrap: { width: 250 },
     });
 
     this.momentBannerBg = this.add
-      .rectangle(VIEW_W / 2, PITCH_Y + 24, 620, 54, 0x08131d, 0.94)
+      .rectangle(VIEW_W / 2, PITCH_Y + 22, 452, 42, 0x08131d, 0.92)
       .setStrokeStyle(2, GOLD, 0.9)
       .setDepth(19);
     this.momentBannerTitle = this.add
-      .text(VIEW_W / 2, PITCH_Y + 10, "", {
+      .text(VIEW_W / 2, PITCH_Y + 9, "", {
         fontFamily: "Georgia",
-        fontSize: "24px",
+        fontSize: "20px",
         color: "#f8f1dd",
         fontStyle: "bold",
       })
       .setOrigin(0.5)
       .setDepth(20);
     this.momentBannerBody = this.add
-      .text(VIEW_W / 2, PITCH_Y + 34, "", {
+      .text(VIEW_W / 2, PITCH_Y + 27, "", {
         fontFamily: "monospace",
-        fontSize: "12px",
+        fontSize: "10px",
         color: "#dbe8ef",
       })
       .setOrigin(0.5)
@@ -368,34 +367,39 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   }
 
   private createHand() {
+    const cardWidth = 374;
+    const cardGap = 16;
+    const cardY = VIEW_H - 126;
+    const cardHeight = 96;
+    const startX = Math.round((VIEW_W - (cardWidth * 3 + cardGap * 2)) / 2);
     for (let index = 0; index < 3; index += 1) {
-      const x = 304 + index * 218;
-      const y = VIEW_H - 158;
-      const bg = this.add.rectangle(x, y, 206, 128, 0x183246, 1).setOrigin(0, 0).setStrokeStyle(2, 0x4d7890, 0.9).setInteractive({ useHandCursor: true });
-      const accent = this.add.rectangle(x, y, 206, 14, HOME, 1).setOrigin(0, 0);
-      const tagBg = this.add.rectangle(x + 162, y + 28, 34, 18, 0x173041, 1).setOrigin(0.5).setVisible(false);
-      const tagText = this.add.text(x + 162, y + 28, "", {
+      const x = startX + index * (cardWidth + cardGap);
+      const y = cardY;
+      const bg = this.add.rectangle(x, y, cardWidth, cardHeight, 0x183246, 1).setOrigin(0, 0).setStrokeStyle(2, 0x4d7890, 0.9).setInteractive({ useHandCursor: true });
+      const accent = this.add.rectangle(x, y, cardWidth, 12, HOME, 1).setOrigin(0, 0);
+      const tagBg = this.add.rectangle(x + cardWidth - 54, y + 24, 34, 18, 0x173041, 1).setOrigin(0.5).setVisible(false);
+      const tagText = this.add.text(x + cardWidth - 54, y + 24, "", {
         fontFamily: "monospace",
         fontSize: "10px",
         color: "#eef8fb",
         fontStyle: "bold",
       }).setOrigin(0.5).setVisible(false);
-      const title = this.add.text(x + 12, y + 18, "", {
+      const title = this.add.text(x + 16, y + 14, "", {
         fontFamily: "Georgia",
-        fontSize: "25px",
+        fontSize: "28px",
         color: "#f7f3e8",
         fontStyle: "bold",
       });
-      const meta = this.add.text(x + 12, y + 48, "", {
+      const meta = this.add.text(x + 16, y + 48, "", {
         fontFamily: "monospace",
-        fontSize: "12px",
+        fontSize: "11px",
         color: "#a5e3e4",
       });
-      const body = this.add.text(x + 12, y + 70, "", {
-        fontFamily: "Georgia",
-        fontSize: "16px",
+      const body = this.add.text(x + 16, y + 66, "", {
+        fontFamily: "monospace",
+        fontSize: "14px",
         color: "#e2edf3",
-        wordWrap: { width: 182 },
+        wordWrap: { width: cardWidth - 32 },
       });
       bg.on("pointerdown", () => {
         const cardId = this.handButtons[index]?.cardId;
@@ -433,12 +437,23 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     for (const player of state.pitchPlayers) {
       const shadow = this.add.ellipse(0, 0, 28, 10, 0x000000, 0.22).setDepth(7);
       const ring = this.add.ellipse(0, 0, 38, 22, GOLD, 0.04).setStrokeStyle(2, GOLD, 0.94).setVisible(false).setDepth(8);
-      const sprite = this.add.sprite(0, 0, this.textureKeyForPlayer(player, "idle")).setDepth(10).setInteractive({ useHandCursor: true });
-      const baseScale = this.getSpriteBaseScale(sprite, player.role === "GK" ? 38 : 36);
-      sprite.setScale(baseScale);
+      const body = this.add
+        .ellipse(0, 0, player.role === "GK" ? 28 : 24, player.role === "GK" ? 28 : 24, this.getTokenShellColor(player), 1)
+        .setStrokeStyle(2, this.getTokenStrokeColor(player), 0.98)
+        .setDepth(10)
+        .setInteractive({ useHandCursor: true });
+      const trim = this.add
+        .ellipse(0, -1, player.role === "GK" ? 18 : 15, player.role === "GK" ? 18 : 15, this.getTokenCoreColor(player), 1)
+        .setDepth(11);
+      const marker = this.add.text(0, -1, this.getPlayerMarkerLabel(player), {
+        fontFamily: "monospace",
+        fontSize: player.role === "GK" ? "10px" : "11px",
+        color: player.role === "GK" ? "#102431" : "#0c1720",
+        fontStyle: "bold",
+      }).setOrigin(0.5).setDepth(12);
       const name = this.add.text(0, 0, player.name, {
         fontFamily: "monospace",
-        fontSize: "12px",
+        fontSize: "11px",
         color: "#f7f3e8",
         backgroundColor: "#0a1822dd",
         padding: { left: 4, right: 4, top: 2, bottom: 2 },
@@ -451,11 +466,11 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         padding: { left: 4, right: 4, top: 2, bottom: 2 },
       }).setOrigin(0.5).setVisible(false).setDepth(12);
 
-      sprite.on("pointerover", () => this.showTooltip(player.playerId));
-      sprite.on("pointerout", () => this.hideTooltip());
-      sprite.on("pointerdown", () => this.onTokenPicked(player.playerId));
+      body.on("pointerover", () => this.showTooltip(player.playerId));
+      body.on("pointerout", () => this.hideTooltip());
+      body.on("pointerdown", () => this.onTokenPicked(player.playerId));
 
-      this.tokenViews.set(player.playerId, { shadow, ring, sprite, name, chance, playerId: player.playerId, lastX: player.x, lastY: player.y, baseScale });
+      this.tokenViews.set(player.playerId, { shadow, ring, body, trim, marker, name, chance, playerId: player.playerId, lastX: player.x, lastY: player.y });
     }
   }
 
@@ -507,18 +522,19 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       state.heroMoment?.detail ??
       state.drama?.detail ??
       (state.turnMode === "PLAYER_ATTACK" ? "Pick the action that changes the shape, not the one that fills time." : "The CPU are committed. Pick the card that punishes the pattern.");
+    const showMomentBanner = state.phase === "LIVE" && Boolean(state.heroMoment || state.drama);
     this.momentBannerBg
-      .setVisible(state.phase === "LIVE")
+      .setVisible(showMomentBanner)
       .setStrokeStyle(2, dramaAccent, 0.96)
       .setFillStyle(0x08131d, 0.92);
-    this.momentBannerTitle.setVisible(state.phase === "LIVE").setText(bannerTitle).setColor(Phaser.Display.Color.IntegerToColor(dramaAccent).rgba);
-    this.momentBannerBody.setVisible(state.phase === "LIVE").setText(this.fitBannerBody(bannerBody));
-    this.homePressureBar.displayWidth = Math.max(2, state.pressure.HOME * 1.1);
-    this.awayPressureBar.displayWidth = Math.max(2, state.pressure.AWAY * 1.1);
+    this.momentBannerTitle.setVisible(showMomentBanner).setText(bannerTitle).setColor(Phaser.Display.Color.IntegerToColor(dramaAccent).rgba);
+    this.momentBannerBody.setVisible(showMomentBanner).setText(this.fitBannerBody(bannerBody));
+    this.homePressureBar.displayWidth = Math.max(2, state.pressure.HOME * 0.92);
+    this.awayPressureBar.displayWidth = Math.max(2, state.pressure.AWAY * 0.92);
     this.homePressureText.setText(`HOME ${state.pressure.HOME}`);
     this.awayPressureText.setText(`CPU ${state.pressure.AWAY}`);
     this.promptText.setText(this.buildPrompt(state));
-    this.cpuText.setText(state.turnMode === "PLAYER_DEFENSE" && state.cpuPreviewCard ? `CPU: ${state.cpuPreviewCard.name}` : "");
+    this.cpuText.setText(state.turnMode === "PLAYER_DEFENSE" && state.cpuPreviewCard ? `CPU shows ${state.cpuPreviewCard.name.toUpperCase()}` : "");
     this.fillHand(state.currentHand, state.turnMode, state);
     this.updatePitchFocus(renderedState.ball, instant);
     this.renderPitchOverlay(renderedState);
@@ -546,9 +562,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       const selected = this.selectedCardId === card.id;
       const focusActive = Boolean(this.selectedCardId);
       button.accent.setFillStyle(attackTurn ? HOME : AWAY, 1);
-      button.bg.setFillStyle(attackTurn ? 0x173246 : 0x482b22, 1);
-      button.bg.setStrokeStyle(2, selected ? GOLD : 0x4d7890, 0.95);
-      button.bg.setScale(selected ? 1.06 : focusActive && !selected ? 0.98 : 1);
+      button.bg.setFillStyle(attackTurn ? 0x132636 : 0x3f271f, 1);
+      button.bg.setStrokeStyle(selected ? 3 : 2, selected ? GOLD : attackTurn ? 0x5b93aa : 0xa96f54, 0.95);
+      button.bg.setScale(selected ? 1.02 : focusActive && !selected ? 0.985 : 1);
       button.bg.setAlpha(focusActive && !selected ? 0.58 : 1);
       button.accent.setAlpha(focusActive && !selected ? 0.42 : 1);
       button.title.setAlpha(focusActive && !selected ? 0.72 : 1);
@@ -558,14 +574,19 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       const defenseGuidance = !attackTurn ? this.engine.getDefenseCardGuidance(card.id) : null;
       button.meta.setText(
         attackTurn
-          ? `${index + 1} | ${card.kind}${card.requiredStars > 0 ? ` | ${card.requiredStars}* skill` : ""}${card.radius > 0 ? ` | ${card.radius.toFixed(0)}m` : ""}`
-          : `${index + 1} | ${card.kind} | ${defenseGuidance?.focus ?? "read"}`
+          ? `${index + 1}  ${card.kind}${card.requiredStars > 0 ? `  ${card.requiredStars}*` : ""}${card.radius > 0 ? `  ${card.radius.toFixed(0)}m` : ""}`
+          : `${index + 1}  ${card.kind}  ${(defenseGuidance?.focus ?? "read").toUpperCase()}`
       );
       button.body.setText(this.getCompactCardBody(card, defenseGuidance?.detail ?? null));
       const tag = this.getCardBadge(card, state);
       if (tag) {
         const width = Math.max(48, tag.label.length * 7 + 18);
-        button.tagBg.setVisible(true).setDisplaySize(width, 18).setPosition(button.bg.x + 206 - width / 2 - 10, button.bg.y + 28).setFillStyle(tag.color, 0.2).setStrokeStyle(1, tag.color, 0.95);
+        button.tagBg
+          .setVisible(true)
+          .setDisplaySize(width, 18)
+          .setPosition(button.bg.x + button.bg.width - width / 2 - 14, button.bg.y + 24)
+          .setFillStyle(tag.color, 0.2)
+          .setStrokeStyle(1, tag.color, 0.95);
         button.tagText.setVisible(true).setText(tag.label).setPosition(button.tagBg.x, button.tagBg.y);
         button.tagBg.setAlpha(focusActive && !selected ? 0.42 : 1);
         button.tagText.setAlpha(focusActive && !selected ? 0.7 : 1);
@@ -583,24 +604,22 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       const y = this.yFor(player.y);
       const motion = Math.hypot(player.x - view.lastX, player.y - view.lastY);
       const animState = this.resolveAnimState(player, motion);
-      const textureKey = this.textureKeyForPlayer(player, animState);
-      if (view.sprite.texture.key !== textureKey) {
-        view.sprite.setTexture(textureKey);
-        view.baseScale = this.getSpriteBaseScale(view.sprite, player.role === "GK" ? 38 : 36);
-      }
-      const facingRight = player.x >= view.lastX ? 1 : -1;
 
       if (instant) {
         view.shadow.setPosition(x, y + 11);
         view.ring.setPosition(x, y + 12);
-        view.sprite.setPosition(x, y + 2);
-        view.name.setPosition(x, y + 34);
+        view.body.setPosition(x, y + 1);
+        view.trim.setPosition(x, y);
+        view.marker.setPosition(x, y);
+        view.name.setPosition(x, y + 30);
         view.chance.setPosition(x, y - 30);
       } else {
         this.tweens.add({ targets: view.shadow, x, y: y + 11, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
         this.tweens.add({ targets: view.ring, x, y: y + 12, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
-        this.tweens.add({ targets: view.sprite, x, y: y + 2, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
-        this.tweens.add({ targets: view.name, x, y: y + 34, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.body, x, y: y + 1, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.trim, x, y, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.marker, x, y, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
+        this.tweens.add({ targets: view.name, x, y: y + 30, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
         this.tweens.add({ targets: view.chance, x, y: y - 30, duration: RESOLVE_TWEEN_MS, ease: "Sine.easeOut" });
       }
 
@@ -612,16 +631,14 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       view.ring.setVisible(player.hasBall || isTarget || isHero || this.spotlightPlayerIds.has(player.playerId));
       view.ring.setFillStyle(player.hasBall ? 0x6de7ff : isHero || isTarget ? GOLD : 0xffffff, player.hasBall ? 0.18 : isHero || isTarget ? 0.12 : 0.04);
       view.ring.setStrokeStyle(2, player.hasBall ? 0x9ff4ff : isHero || isTarget ? GOLD : 0xffffff, player.hasBall || isHero || isTarget ? 0.95 : 0.25);
-      this.applySpriteBodyMotion(view, motion, player.hasBall, facingRight, animState);
-      if (isHero) {
-        view.sprite.setScale(view.sprite.scaleX * 1.08, view.sprite.scaleY * 1.08);
-        view.shadow.setScale(1.12, 1);
-      }
+      this.applyTokenMotion(view, player, motion, player.hasBall, animState, isHero);
       view.name.setText(player.name);
       view.name.setVisible(activeLabels.has(player.playerId) || isHero);
       view.name.setAlpha(activeLabels.has(player.playerId) || isHero ? 1 : 0);
       view.shadow.setAlpha(deemphasize ? 0.18 : 0.25);
-      view.sprite.setAlpha(deemphasize && !isHero ? 0.56 : 1);
+      view.body.setAlpha(deemphasize && !isHero ? 0.58 : 1);
+      view.trim.setAlpha(deemphasize && !isHero ? 0.54 : 1);
+      view.marker.setAlpha(deemphasize && !isHero ? 0.5 : 1);
       view.chance.setAlpha(isTarget ? 1 : 0.78);
       const target = this.passTargets.get(player.playerId);
       view.chance.setVisible(Boolean(target));
@@ -1042,27 +1059,27 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
 
   private buildPrompt(state: MatchStateView) {
     if (state.phase === "HALFTIME") {
-      return "Pick a slot, then a bench player.";
+      return "Pick a slot. Pick a sub.";
     }
     if (state.phase === "FULLTIME") {
       return "Match complete.";
     }
     if (state.heroMoment && this.selectionMode === "NONE") {
-      return `${state.heroMoment.label}: ${state.heroMoment.cardName} +${state.heroMoment.bonus} with ${state.heroMoment.playerName}.`;
+      return `${state.heroMoment.label}: ${state.heroMoment.cardName} +${state.heroMoment.bonus}.`;
     }
     if (state.turnMode === "PLAYER_DEFENSE") {
-      return "Pick a defensive card.";
+      return "Pick the stop.";
     }
     if (this.selectionMode === "PASS") {
-      return "Pick a target.";
+      return "Pick the receiver.";
     }
     if (this.selectionMode === "DRIBBLE") {
-      return "Pick a burst lane.";
+      return "Pick a lane.";
     }
     if (this.selectionMode === "SHOT") {
-      return "SPACE for aim, then power.";
+      return "SPACE to aim. SPACE to hit.";
     }
-    return "Pick an attacking card.";
+    return "Pick the play.";
   }
 
   private cancelSelection() {
@@ -1302,11 +1319,11 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   }
 
   private fitStatusLine(text: string) {
-    return text.length <= 72 ? text : `${text.slice(0, 69)}...`;
+    return text.length <= 34 ? text : `${text.slice(0, 31)}...`;
   }
 
   private fitBannerBody(text: string) {
-    return text.length <= 56 ? text : `${text.slice(0, 53)}...`;
+    return text.length <= 44 ? text : `${text.slice(0, 41)}...`;
   }
 
   private getCompactCardBody(card: MatchCardView, defenseDetail: string | null) {
@@ -1318,7 +1335,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         .replace(/Use it when.*$/i, "")
         .replace(/Use it to.*$/i, "")
         .trim();
-      return short.length <= 58 ? short : `${short.slice(0, 55)}...`;
+      return short.length <= 54 ? short : `${short.slice(0, 51)}...`;
     }
 
     switch (card.id) {
@@ -1351,7 +1368,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       case "POWER_SHOT":
         return "Hit through bodies.";
       default:
-        return card.description.length <= 58 ? card.description : `${card.description.slice(0, 55)}...`;
+        return card.description.length <= 54 ? card.description : `${card.description.slice(0, 51)}...`;
     }
   }
 
@@ -1475,7 +1492,6 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         active.add(ballHolder.playerId);
       }
       this.passTargets.forEach((_, playerId) => active.add(playerId));
-      Array.from(this.spotlightPlayerIds).slice(0, 2).forEach((playerId) => active.add(playerId));
     }
     if (state.heroMoment?.playerId) {
       active.add(state.heroMoment.playerId);
@@ -1724,9 +1740,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       if (!token) continue;
       token.ring.setVisible(true).setStrokeStyle(3, accent, 1).setAlpha(1);
       this.tweens.add({
-        targets: token.sprite,
-        scaleX: token.sprite.scaleX * (result.goalScored ? 1.18 : 1.1),
-        scaleY: token.sprite.scaleY * (result.goalScored ? 1.18 : 1.1),
+        targets: [token.body, token.trim, token.marker],
+        scaleX: `*=${result.goalScored ? 1.18 : 1.1}`,
+        scaleY: `*=${result.goalScored ? 1.18 : 1.1}`,
         duration: 110,
         yoyo: true,
         ease: "Quad.easeOut",
@@ -1740,7 +1756,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
         yoyo: true,
         ease: "Sine.easeOut",
       });
-      this.spawnImpactBurst(token.sprite.x, token.sprite.y + 2, accent, result.goalScored ? 12 : 7, result.goalScored ? 34 : 20);
+      this.spawnImpactBurst(token.body.x, token.body.y + 2, accent, result.goalScored ? 12 : 7, result.goalScored ? 34 : 20);
     }
   }
 
@@ -1762,8 +1778,8 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
           : 0;
       if (diveDirection !== 0) {
         this.tweens.add({
-          targets: [keeperView.shadow, keeperView.ring, keeperView.sprite],
-          x: keeperView.sprite.x + diveDirection,
+          targets: [keeperView.shadow, keeperView.ring, keeperView.body, keeperView.trim, keeperView.marker],
+          x: `+=${diveDirection}`,
           duration: 140,
           yoyo: true,
           ease: "Quad.easeOut",
@@ -1820,7 +1836,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     if (!line) {
       return "";
     }
-    return line.length <= 64 ? line : `${line.slice(0, 61)}...`;
+    return line.length <= 44 ? line : `${line.slice(0, 41)}...`;
   }
 
   private getBallRenderPoint(ball: MatchStateView["ball"]) {
@@ -1860,15 +1876,6 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     return Phaser.Math.Clamp(((screenY - (PITCH_Y + this.pitchOffsetY)) / PITCH_H) * 64, 0, 64);
   }
 
-  private textureKeyForPlayer(player: PitchPlayerView, state: "idle" | "run" | "kick" | "tackle" | "save") {
-    const prefix =
-      player.role === "GK" ? (player.teamId === "HOME" ? "player_gk_home" : "player_gk_away") : player.teamId === "HOME" ? "player_home" : "player_away";
-    if (state === "run") {
-      return `${prefix}_${Math.floor(this.time.now / 90) % 2 === 0 ? "run_a" : "run_b"}`;
-    }
-    return `${prefix}_${state}`;
-  }
-
   private resolveAnimState(player: PitchPlayerView, motion: number) {
     if (player.role === "GK" && this.pendingShotSetup?.keeper.playerId === player.playerId) {
       return "save" as const;
@@ -1885,40 +1892,72 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     return "idle" as const;
   }
 
-  private getSpriteBaseScale(sprite: Phaser.GameObjects.Sprite, targetHeight: number) {
-    const source = sprite.texture.getSourceImage() as { width?: number; height?: number } | undefined;
-    const sourceHeight = source?.height ?? sprite.height ?? 16;
-    return Phaser.Math.Clamp(targetHeight / Math.max(1, sourceHeight), 0.4, 3);
+  private getTokenShellColor(player: PitchPlayerView) {
+    if (player.role === "GK") {
+      return player.teamId === "HOME" ? 0xeaf8ff : 0xfff1e6;
+    }
+    return player.teamId === "HOME" ? 0xf6fbff : 0xfff7ed;
   }
 
-  private applySpriteBodyMotion(
+  private getTokenCoreColor(player: PitchPlayerView) {
+    if (player.role === "GK") {
+      return player.teamId === "HOME" ? 0x6bcfff : 0xffbf82;
+    }
+    return player.teamId === "HOME" ? 0x61d7e3 : 0xff9d66;
+  }
+
+  private getTokenStrokeColor(player: PitchPlayerView) {
+    return player.teamId === "HOME" ? 0x112a39 : 0x3d2418;
+  }
+
+  private getPlayerMarkerLabel(player: PitchPlayerView) {
+    if (player.role === "GK") {
+      return "G";
+    }
+    const parts = player.name.trim().split(/\s+/);
+    return (parts[parts.length - 1]?.slice(0, 1) ?? player.name.slice(0, 1) ?? "?").toUpperCase();
+  }
+
+  private applyTokenMotion(
     view: TokenView,
+    player: PitchPlayerView,
     motion: number,
     hasBall: boolean,
-    facingRight: number,
-    animState: "idle" | "run" | "kick" | "tackle" | "save"
+    animState: "idle" | "run" | "kick" | "tackle" | "save",
+    isHero: boolean
   ) {
     const bob = Math.sin((this.time.now + view.lastX * 8) * 0.022);
-    let spriteY = view.sprite.y;
+    let tokenY = view.body.y;
+    let shellScale = player.role === "GK" ? 1.08 : 1;
+    let coreScale = player.role === "GK" ? 1.08 : 1;
     if (animState === "run") {
-      spriteY += bob * 1.1;
-      view.sprite.setScale(view.baseScale * (hasBall ? 1.03 : 1));
+      tokenY += bob * 0.9;
+      shellScale *= hasBall ? 1.06 : 1.03;
+      coreScale *= 1.08;
       view.shadow.setScale(1.04 + Math.min(motion * 0.035, 0.12), 1);
     } else if (animState === "kick" || animState === "save") {
-      spriteY -= 1;
-      view.sprite.setScale(view.baseScale * 1.05);
+      tokenY -= 1.2;
+      shellScale *= 1.1;
+      coreScale *= 1.14;
       view.shadow.setScale(1.1, 1);
     } else if (animState === "tackle") {
-      spriteY += 0.4;
-      view.sprite.setScale(view.baseScale * 1.02);
+      tokenY += 0.4;
+      shellScale *= 1.05;
+      coreScale *= 0.98;
       view.shadow.setScale(1.08, 1);
     } else {
-      view.sprite.setScale(view.baseScale * (hasBall ? 1.03 : 1));
+      shellScale *= hasBall ? 1.05 : 1;
+      coreScale *= hasBall ? 1.03 : 1;
       view.shadow.setScale(1, 1);
     }
-    view.sprite.setFlipX(facingRight < 0);
-    view.sprite.setY(spriteY);
-    view.sprite.clearTint();
+    if (isHero) {
+      shellScale *= 1.1;
+      coreScale *= 1.14;
+      view.shadow.setScale(1.14, 1);
+    }
+    view.body.setFillStyle(this.getTokenShellColor(player), 1).setStrokeStyle(2, this.getTokenStrokeColor(player), 0.98).setScale(shellScale).setY(tokenY);
+    view.trim.setFillStyle(this.getTokenCoreColor(player), hasBall ? 1 : 0.98).setScale(coreScale).setY(tokenY - 1);
+    view.marker.setColor(player.role === "GK" ? "#102431" : "#0c1720").setScale(Math.min(coreScale, 1.12)).setY(tokenY - 1);
   }
 
   private updatePitchFocus(ball: MatchStateView["ball"], _instant: boolean) {
@@ -1981,24 +2020,23 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     }
 
     const target = targetPlayerId ? this.tokenViews.get(targetPlayerId) : null;
-    const from = new Phaser.Math.Vector2(actor.sprite.x, actor.sprite.y + 2);
+    const actorTeam = this.engine.getState().pitchPlayers.find((player) => player.playerId === actorPlayerId)?.teamId ?? "HOME";
+    const from = new Phaser.Math.Vector2(actor.body.x, actor.body.y + 2);
     const toward = target
-      ? new Phaser.Math.Vector2(target.sprite.x, target.sprite.y + 4).subtract(from).normalize()
-      : new Phaser.Math.Vector2(actor.sprite.flipX ? -1 : 1, 0.12).normalize();
+      ? new Phaser.Math.Vector2(target.body.x, target.body.y + 4).subtract(from).normalize()
+      : new Phaser.Math.Vector2(actorTeam === "HOME" ? 1 : -1, 0.12).normalize();
     const contactPoint = {
       x: from.x + toward.x * 10,
       y: from.y + toward.y * 6,
     };
 
     this.tweens.add({
-      targets: actor.sprite,
-      x: actor.sprite.x + toward.x * 4,
-      y: actor.sprite.y + toward.y * 2 - 1,
-      angle: toward.x * 2.5,
+      targets: [actor.body, actor.trim, actor.marker],
+      x: `+=${toward.x * 4}`,
+      y: `+=${toward.y * 2 - 1}`,
       duration: 78,
       yoyo: true,
       ease: "Quad.easeOut",
-      onComplete: () => actor.sprite.setAngle(0),
     });
     this.tweens.add({
       targets: actor.shadow,
@@ -2011,9 +2049,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
 
     if (target) {
       this.tweens.add({
-        targets: target.sprite,
-        x: target.sprite.x - toward.x * 3,
-        y: target.sprite.y - toward.y * 1.5 - 1,
+        targets: [target.body, target.trim, target.marker],
+        x: `+=${-toward.x * 3}`,
+        y: `+=${-toward.y * 1.5 - 1}`,
         duration: 86,
         yoyo: true,
         ease: "Sine.easeOut",
@@ -2038,9 +2076,10 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     }
 
     const keeper = keeperPlayerId ? this.tokenViews.get(keeperPlayerId) : null;
-    const goalX = keeper ? keeper.sprite.x : shooter.sprite.x + (shooter.sprite.flipX ? -120 : 120);
-    const goalY = keeper ? keeper.sprite.y : shooter.sprite.y - 8;
-    const from = new Phaser.Math.Vector2(shooter.sprite.x, shooter.sprite.y + 2);
+    const shooterTeam = this.engine.getState().pitchPlayers.find((player) => player.playerId === actorPlayerId)?.teamId ?? "HOME";
+    const goalX = keeper ? keeper.body.x : shooter.body.x + (shooterTeam === "HOME" ? 120 : -120);
+    const goalY = keeper ? keeper.body.y : shooter.body.y - 8;
+    const from = new Phaser.Math.Vector2(shooter.body.x, shooter.body.y + 2);
     const toward = new Phaser.Math.Vector2(goalX, goalY).subtract(from).normalize();
     const strikePoint = {
       x: from.x + toward.x * 12,
@@ -2048,14 +2087,12 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     };
 
     this.tweens.add({
-      targets: shooter.sprite,
-      x: shooter.sprite.x + toward.x * 6,
-      y: shooter.sprite.y + toward.y * 2 - 2,
-      angle: toward.x * 3.8,
+      targets: [shooter.body, shooter.trim, shooter.marker],
+      x: `+=${toward.x * 6}`,
+      y: `+=${toward.y * 2 - 2}`,
       duration: 92,
       yoyo: true,
       ease: "Cubic.easeOut",
-      onComplete: () => shooter.sprite.setAngle(0),
     });
     this.tweens.add({
       targets: shooter.shadow,
@@ -2067,9 +2104,9 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     });
 
     if (keeper) {
-      const keeperShift = keeper.sprite.x < shooter.sprite.x ? 5 : -5;
+      const keeperShift = keeper.body.x < shooter.body.x ? 5 : -5;
       this.tweens.add({
-        targets: [keeper.sprite, keeper.shadow, keeper.ring],
+        targets: [keeper.body, keeper.trim, keeper.marker, keeper.shadow, keeper.ring],
         x: `+=${keeperShift}`,
         duration: 86,
         yoyo: true,
@@ -2153,8 +2190,8 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       const token = this.tokenViews.get(playerId);
       if (!token) continue;
       this.tweens.add({
-        targets: token.sprite,
-        y: token.sprite.y - 2,
+        targets: [token.body, token.trim, token.marker],
+        y: "-=2",
         duration: 60,
         yoyo: true,
         ease: "Quad.easeOut",
@@ -2171,7 +2208,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     if (anticipationIds.length > 0) {
       const anchor = this.tokenViews.get(anticipationIds[0]);
       if (anchor) {
-        this.spawnImpactBurst(anchor.sprite.x, anchor.sprite.y + 2, this.getResultAccent(result), 5, 14);
+        this.spawnImpactBurst(anchor.body.x, anchor.body.y + 2, this.getResultAccent(result), 5, 14);
       }
     }
   }
