@@ -157,6 +157,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   private pendingTrailStyle: TrailStyle | null = null;
   private pendingShotSetup: ShotSetupView | null = null;
   private pendingResolutionContext: ResolutionVisualContext | null = null;
+  private pendingVisualBall: MatchStateView["ball"] | null = null;
   private dribblePreview: DribblePreviewState | null = null;
 
   constructor() {
@@ -445,6 +446,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
 
   private refreshUi(instant: boolean) {
     const state = this.engine.getState();
+    const renderedState = this.getRenderedState(state);
     const turnAccent = state.turnMode === "PLAYER_ATTACK" ? HOME : state.turnMode === "PLAYER_DEFENSE" ? AWAY : GOLD;
     const badgeLabel =
       state.phase === "HALFTIME" ? "HALFTIME" : state.phase === "FULLTIME" ? "FULL TIME" : state.turnMode === "PLAYER_ATTACK" ? "ATTACK" : "DEFEND";
@@ -466,10 +468,10 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     this.promptText.setText(this.buildPrompt(state));
     this.cpuText.setText(state.turnMode === "PLAYER_DEFENSE" && state.cpuPreviewCard ? `CPU card: ${state.cpuPreviewCard.name}\nYou know the move, not the destination.` : "");
     this.fillHand(state.currentHand, state.turnMode, state);
-    this.updatePitchFocus(state.ball, instant);
-    this.renderPitchOverlay(state);
-    this.updateTokens(state.pitchPlayers, instant);
-    this.updateBall(state.ball, instant);
+    this.updatePitchFocus(renderedState.ball, instant);
+    this.renderPitchOverlay(renderedState);
+    this.updateTokens(renderedState.pitchPlayers, instant);
+    this.updateBall(renderedState.ball, instant);
     this.commentaryText.setText(this.formatCommentary(state.commentaryFeed));
     this.renderSelectionHints();
     this.renderHalftime(state);
@@ -501,8 +503,13 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       button.meta.setAlpha(focusActive && !selected ? 0.62 : 1);
       button.body.setAlpha(focusActive && !selected ? 0.62 : 1);
       button.title.setText(card.name);
-      button.meta.setText(`${index + 1} | ${card.kind}${card.requiredStars > 0 ? ` | ${card.requiredStars}* skill` : ""}${card.radius > 0 ? ` | ${card.radius.toFixed(0)}m` : ""}`);
-      button.body.setText(card.description);
+      const defenseGuidance = !attackTurn ? this.engine.getDefenseCardGuidance(card.id) : null;
+      button.meta.setText(
+        attackTurn
+          ? `${index + 1} | ${card.kind}${card.requiredStars > 0 ? ` | ${card.requiredStars}* skill` : ""}${card.radius > 0 ? ` | ${card.radius.toFixed(0)}m` : ""}`
+          : `${index + 1} | ${card.kind} | ${defenseGuidance?.focus ?? "read the move"}`
+      );
+      button.body.setText(defenseGuidance ? defenseGuidance.detail : card.description);
       const tag = this.getCardBadge(card, state);
       if (tag) {
         const width = Math.max(48, tag.label.length * 7 + 18);
@@ -741,12 +748,14 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
     );
     this.spotlightPlayerIds.add(result.ball.holderId);
     this.pendingTrailStyle = this.getTrailStyle(result);
+    this.pendingVisualBall = result.visualBall ? { ...result.visualBall } : null;
     this.cancelSelection();
     this.commentaryText.setText(this.formatCommentary(result.commentary));
     const contactDelay = this.playContactAnimation(result);
     this.time.delayedCall(contactDelay, () => {
+      const resolvedBall = result.visualBall ?? result.ball;
       this.showResultBanner(result);
-      this.pulseActionAtBall(result.ball, this.getResultAccent(result));
+      this.pulseActionAtBall(resolvedBall, this.getResultAccent(result));
       this.punchCamera(result);
       this.flashScreen(this.getResultAccent(result), result.goalScored ? 0.2 : result.roundEnded ? 0.11 : 0.07, result.goalScored ? 260 : 180);
       this.refreshUi(false);
@@ -761,8 +770,25 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       this.pendingTrailStyle = null;
       this.pendingShotSetup = null;
       this.pendingResolutionContext = null;
+      this.pendingVisualBall = null;
       this.refreshUi(true);
     });
+  }
+
+  private getRenderedState(state: MatchStateView): MatchStateView {
+    if (!this.animationLocked || !this.pendingVisualBall) {
+      return state;
+    }
+
+    const visualHolderId = this.pendingVisualBall.holderId;
+    return {
+      ...state,
+      ball: { ...this.pendingVisualBall },
+      pitchPlayers: state.pitchPlayers.map((player) => ({
+        ...player,
+        hasBall: Boolean(visualHolderId) && player.playerId === visualHolderId,
+      })),
+    };
   }
 
   private renderSelectionHints() {
@@ -1190,11 +1216,11 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
       }
       return null;
     }
-    const trapLabel = this.getDefenseCardLabel(card.id);
-    if (!trapLabel) {
+    const guidance = this.engine.getDefenseCardGuidance(card.id);
+    if (!guidance) {
       return null;
     }
-    return { label: trapLabel.toUpperCase(), color: AWAY };
+    return { label: guidance.badge, color: guidance.badge.startsWith("BEST") ? GOLD : AWAY };
   }
 
   private getDefenseCardLabel(cardId: string) {
@@ -1711,7 +1737,7 @@ export class CardPrototypeMatchScene extends Phaser.Scene {
   }
 
   private updateCarrierAura() {
-    const holder = this.engine.getState().pitchPlayers.find((player) => player.hasBall);
+    const holder = this.getRenderedState(this.engine.getState()).pitchPlayers.find((player) => player.hasBall);
     if (!holder) {
       this.carrierAura.setVisible(false);
       return;

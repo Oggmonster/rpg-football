@@ -97,12 +97,13 @@ export class BallSystem {
       }
       case "IN_FLIGHT":
       case "SHOT": {
+        const previousPos = { ...state.ball.pos };
         state.ball.pos = add(state.ball.pos, scale(state.ball.vel, dt));
         const dampingPerSec = state.ball.state === "SHOT" ? 0.06 : 0.45;
         const damp = Math.max(0.95, 1 - dampingPerSec * dt);
         state.ball.vel = scale(state.ball.vel, damp);
 
-        if (this.tryLaneInterception(state, out)) {
+        if (this.tryLaneInterception(state, previousPos, state.ball.pos, out)) {
           break;
         }
 
@@ -178,33 +179,11 @@ export class BallSystem {
   }
 
   passTo(state: MatchState, targetPos: Vec2, speedScale = 1): boolean {
-    if (state.ball.state !== "CARRIED") return false;
-    const carrier = state.ball.carrierId ? state.players[state.ball.carrierId] : null;
-    if (!carrier) return false;
-
-    const dir = normalize({ x: targetPos.x - state.ball.pos.x, y: targetPos.y - state.ball.pos.y });
-    const clampedScale = Math.max(0.55, Math.min(1.7, Number.isFinite(speedScale) ? speedScale : 1));
-    state.ball.vel = scale(dir, TUNING.passSpeedPxPerSec * clampedScale);
-    state.ball.targetPos = { ...targetPos };
-    state.ball.carrierId = null;
-    state.ball.lastTouchTeam = carrier.teamId;
-    state.ball.carrierProtectedUntilMs = 0;
-    return this.canTransition(state.ball.state, "IN_FLIGHT") ? ((state.ball.state = "IN_FLIGHT"), true) : false;
+    return this.startDirectedFlight(state, targetPos, "IN_FLIGHT", TUNING.passSpeedPxPerSec, speedScale, 0.55, 1.7);
   }
 
   shootTo(state: MatchState, targetPos: Vec2, speedScale = 1): boolean {
-    if (state.ball.state !== "CARRIED") return false;
-    const carrier = state.ball.carrierId ? state.players[state.ball.carrierId] : null;
-    if (!carrier) return false;
-
-    const dir = normalize({ x: targetPos.x - state.ball.pos.x, y: targetPos.y - state.ball.pos.y });
-    const clampedScale = Math.max(0.6, Math.min(1.85, Number.isFinite(speedScale) ? speedScale : 1));
-    state.ball.vel = scale(dir, TUNING.shotSpeedPxPerSec * clampedScale);
-    state.ball.targetPos = { ...targetPos };
-    state.ball.carrierId = null;
-    state.ball.lastTouchTeam = carrier.teamId;
-    state.ball.carrierProtectedUntilMs = 0;
-    return this.canTransition(state.ball.state, "SHOT") ? ((state.ball.state = "SHOT"), true) : false;
+    return this.startDirectedFlight(state, targetPos, "SHOT", TUNING.shotSpeedPxPerSec, speedScale, 0.6, 1.85);
   }
 
   forceLoose(state: MatchState): boolean {
@@ -275,28 +254,27 @@ export class BallSystem {
     }
   }
 
-  private tryLaneInterception(state: MatchState, out: BallTransition[]): boolean {
+  private tryLaneInterception(state: MatchState, segmentStart: Vec2, segmentEnd: Vec2, out: BallTransition[]): boolean {
     if (!state.ball.targetPos) return false;
     if (state.ball.state !== "IN_FLIGHT" && state.ball.state !== "SHOT") return false;
     const interceptTeam: TeamId = state.ball.lastTouchTeam === "HOME" ? "AWAY" : "HOME";
-    const from = state.ball.pos;
-    const to = state.ball.targetPos;
-    const travel = { x: to.x - from.x, y: to.y - from.y };
-    const travelLen = Math.max(1, Math.hypot(travel.x, travel.y));
-    const travelDir = { x: travel.x / travelLen, y: travel.y / travelLen };
+    const segment = { x: segmentEnd.x - segmentStart.x, y: segmentEnd.y - segmentStart.y };
+    const segmentLen = Math.hypot(segment.x, segment.y);
+    if (segmentLen < 0.0001) return false;
+    const segmentDir = { x: segment.x / segmentLen, y: segment.y / segmentLen };
 
     let bestId: string | null = null;
     let bestScore = Number.NEGATIVE_INFINITY;
     for (const id of state.teams[interceptTeam].playerIds) {
       const p = state.players[id];
       if (!p || p.role === "GK") continue;
-      const dLane = segmentDistance(p.pos, from, to);
-      const toDef = { x: p.pos.x - from.x, y: p.pos.y - from.y };
-      const ahead = dot(toDef, travelDir);
-      if (ahead < 18 || ahead > travelLen + 24) continue;
-      if (dLane > TUNING.interceptRadiusPx * 1.2) continue;
-      const laneScore = 1 - dLane / (TUNING.interceptRadiusPx * 1.2);
-      const reachScore = 1 - Math.min(1, Math.abs(ahead) / (travelLen + 1));
+      const dLane = segmentDistance(p.pos, segmentStart, segmentEnd);
+      const toDef = { x: p.pos.x - segmentStart.x, y: p.pos.y - segmentStart.y };
+      const progress = dot(toDef, segmentDir);
+      if (progress < -8 || progress > segmentLen + 8) continue;
+      if (dLane > TUNING.interceptRadiusPx) continue;
+      const laneScore = 1 - dLane / TUNING.interceptRadiusPx;
+      const reachScore = 1 - Math.min(1, Math.abs(progress - segmentLen * 0.5) / (segmentLen * 0.5 + 1));
       const score = laneScore * 0.7 + reachScore * 0.3 + (p.stats.def + p.stats.pac) / 220;
       if (score > bestScore) {
         bestScore = score;
@@ -311,6 +289,30 @@ export class BallSystem {
     if (this.rng.next() > interceptChance) return false;
     this.assignCarrier(state, bestId);
     this.tryTransition(state, "CARRIED", "lane_intercept", out);
+    return true;
+  }
+
+  private startDirectedFlight(
+    state: MatchState,
+    targetPos: Vec2,
+    nextState: "IN_FLIGHT" | "SHOT",
+    baseSpeed: number,
+    speedScale: number,
+    minScale: number,
+    maxScale: number
+  ): boolean {
+    if (state.ball.state !== "CARRIED") return false;
+    const carrier = state.ball.carrierId ? state.players[state.ball.carrierId] : null;
+    if (!carrier || !this.canTransition(state.ball.state, nextState)) return false;
+
+    const dir = normalize({ x: targetPos.x - state.ball.pos.x, y: targetPos.y - state.ball.pos.y });
+    const clampedScale = Math.max(minScale, Math.min(maxScale, Number.isFinite(speedScale) ? speedScale : 1));
+    state.ball.vel = scale(dir, baseSpeed * clampedScale);
+    state.ball.targetPos = { ...targetPos };
+    state.ball.carrierId = null;
+    state.ball.lastTouchTeam = carrier.teamId;
+    state.ball.carrierProtectedUntilMs = 0;
+    state.ball.state = nextState;
     return true;
   }
 

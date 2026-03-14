@@ -426,4 +426,105 @@ describe("CardFootballEngine", () => {
     expect(state.teams.find((team) => team.id === "HOME")?.playstyle).toBe("CONTROL");
     expect(["CONTROL", "DIRECT", "WIDE", "PRESSING"]).toContain(state.teams.find((team) => team.id === "AWAY")?.playstyle);
   });
+
+  test("off-target shots keep a visual miss point instead of snapping to the goal-kick holder", () => {
+    const engine = new CardFootballEngine({ rngSeed: 73, kickoffTeamFirstHalf: "HOME" }) as unknown as CardFootballEngine & {
+      rng: { int: (min: number, max: number) => number };
+      state: {
+        currentHand: string[];
+      };
+    };
+
+    engine.state.currentHand = ["PLACED_SHOT", "BODY_FEINT", "SHORT_PASS"];
+    engine.rng.int = () => 100;
+
+    const result = engine.playAttackCard("PLACED_SHOT", {
+      type: "SHOT",
+      shot: {
+        aimQuality: 0.82,
+        powerQuality: 0.76,
+      },
+    });
+
+    expect(result.title).toBe("Off Target");
+    expect(result.visualBall).not.toBeNull();
+    expect((result.visualBall?.x ?? 0) > 100).toBe(true);
+    expect(result.visualBall?.holderId).toBe("");
+    expect(result.ball.holderId).not.toBe(result.visualBall?.holderId);
+  });
+
+  test("goal resolutions keep a visual goal-mouth target while the live state resets to kickoff", () => {
+    const engine = new CardFootballEngine({ rngSeed: 74, kickoffTeamFirstHalf: "HOME" }) as unknown as CardFootballEngine & {
+      rng: { int: (min: number, max: number) => number };
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        currentHand: string[];
+        teams: {
+          HOME: {
+            lineup: {
+              ST: { playerId: string; x: number; y: number };
+            };
+          };
+          AWAY: {
+            lineup: Record<string, { x: number; y: number }>;
+          };
+        };
+      };
+    };
+
+    engine.state.teams.HOME.lineup.ST.x = 83;
+    engine.state.teams.HOME.lineup.ST.y = 32;
+    engine.state.ball.teamId = "HOME";
+    engine.state.ball.holderId = engine.state.teams.HOME.lineup.ST.playerId;
+    engine.state.ball.x = 83;
+    engine.state.ball.y = 32;
+    for (const slot of ["LB", "LCB", "RCB", "RB", "LCM", "CM", "RCM", "LW", "ST", "RW"]) {
+      engine.state.teams.AWAY.lineup[slot].x = 58;
+      engine.state.teams.AWAY.lineup[slot].y = 10;
+    }
+    engine.state.currentHand = ["PLACED_SHOT", "BODY_FEINT", "SHORT_PASS"];
+    engine.rng.int = () => 1;
+
+    const result = engine.playAttackCard("PLACED_SHOT", {
+      type: "SHOT",
+      shot: {
+        aimQuality: 0.9,
+        powerQuality: 0.7,
+      },
+    });
+
+    expect(result.title).toBe("Goal");
+    expect(result.visualBall).not.toBeNull();
+    expect((result.visualBall?.x ?? 0) > 95).toBe(true);
+    expect(result.visualBall?.holderId).toBe("");
+    expect(result.ball.x).toBe(50);
+    expect(result.ball.holderId).not.toBe(result.visualBall?.holderId);
+  });
+
+  test("defense guidance highlights runner-tracking cards against direct through balls", () => {
+    const engine = new CardFootballEngine({ rngSeed: 75, kickoffTeamFirstHalf: "HOME" }) as unknown as CardFootballEngine & {
+      state: {
+        turnMode: "PLAYER_DEFENSE";
+        currentHand: string[];
+        cpuPendingAttack: { hand: string[]; cardId: string };
+        teams: {
+          AWAY: { playstyle: "CONTROL" | "DIRECT" | "WIDE" | "PRESSING" };
+        };
+      };
+    };
+
+    engine.state.turnMode = "PLAYER_DEFENSE";
+    engine.state.currentHand = ["LANE_BLOCK", "TRACK_RUNNER", "DROP_OFF"];
+    engine.state.cpuPendingAttack = { hand: ["THROUGH_BALL"], cardId: "THROUGH_BALL" };
+    engine.state.teams.AWAY.playstyle = "DIRECT";
+
+    const tracker = engine.getDefenseCardGuidance("TRACK_RUNNER");
+    const laneBlock = engine.getDefenseCardGuidance("LANE_BLOCK");
+
+    expect(tracker).not.toBeNull();
+    expect(laneBlock).not.toBeNull();
+    expect((tracker?.score ?? 0) > (laneBlock?.score ?? 0)).toBe(true);
+    expect(tracker?.badge).toMatch(/BEST|GOOD/);
+    expect(tracker?.focus).toMatch(/run/i);
+  });
 });

@@ -175,7 +175,7 @@ describe("BallSystem transitions", () => {
     expect(passOk).toBe(true);
 
     let intercepted = false;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 40; i++) {
       const t = system.step(state, 16);
       if (t.some((x) => x.reason === "lane_intercept")) {
         intercepted = true;
@@ -186,6 +186,66 @@ describe("BallSystem transitions", () => {
     expect(intercepted).toBe(true);
     expect(state.ball.state).toBe("CARRIED");
     expect(state.ball.carrierId).toBe(defenderId);
+  });
+
+  test("passes do not teleport to a defender before the ball reaches the lane segment", () => {
+    const state = makeState(111);
+    const system = new BallSystem(111);
+    system.step(state, 16);
+
+    const passerId = state.teams.HOME.playerIds.find((id) => state.players[id].role !== "GK")!;
+    const passer = state.players[passerId];
+    passer.pos = { x: 420, y: 270 };
+    state.ball.state = "CARRIED";
+    state.ball.carrierId = passerId;
+    state.ball.pos = { x: 424, y: 270 };
+    state.ball.lastTouchTeam = "HOME";
+
+    const defenderId = state.teams.AWAY.playerIds.find((id) => state.players[id].role !== "GK")!;
+    const defender = state.players[defenderId];
+    defender.pos = { x: 620, y: 270 };
+    defender.stats.def = 99;
+    defender.stats.pac = 99;
+
+    const passOk = system.passTo(state, { x: 700, y: 270 });
+    expect(passOk).toBe(true);
+
+    const transitions = system.step(state, 16);
+
+    expect(transitions.some((x) => x.reason === "lane_intercept")).toBe(false);
+    expect(state.ball.state).toBe("IN_FLIGHT");
+    expect(state.ball.carrierId).toBeNull();
+    expect(state.ball.pos.x).toBeLessThan(defender.pos.x - 100);
+  });
+
+  test("shots do not teleport to a lane defender on the first flight frame", () => {
+    const state = makeState(112);
+    const system = new BallSystem(112);
+    system.step(state, 16);
+
+    const shooterId = state.teams.HOME.playerIds.find((id) => state.players[id].role !== "GK")!;
+    const shooter = state.players[shooterId];
+    shooter.pos = { x: PITCH_LEFT + 220, y: PITCH_CENTER_Y };
+    state.ball.state = "CARRIED";
+    state.ball.carrierId = shooterId;
+    state.ball.pos = { x: PITCH_LEFT + 224, y: PITCH_CENTER_Y };
+    state.ball.lastTouchTeam = "HOME";
+
+    const defenderId = state.teams.AWAY.playerIds.find((id) => state.players[id].role !== "GK")!;
+    const defender = state.players[defenderId];
+    defender.pos = { x: PITCH_LEFT + 420, y: PITCH_CENTER_Y };
+    defender.stats.def = 99;
+    defender.stats.pac = 99;
+
+    const shotOk = system.shootTo(state, { x: PITCH_RIGHT + 160, y: PITCH_CENTER_Y });
+    expect(shotOk).toBe(true);
+
+    const transitions = system.step(state, 16);
+
+    expect(transitions.some((x) => x.reason === "lane_intercept")).toBe(false);
+    expect(state.ball.state).toBe("SHOT");
+    expect(state.ball.carrierId).toBeNull();
+    expect(state.ball.pos.x).toBeLessThan(defender.pos.x - 150);
   });
 
   test("shot outside goal mouth does not count as goal", () => {

@@ -285,6 +285,7 @@ export type ActionResolutionView = {
   defendingCard: MatchCardView | null;
   cpuPreviewCard: MatchCardView | null;
   ball: BallState;
+  visualBall: BallState | null;
   restart: RestartState | null;
   animations: {
     playerId: string;
@@ -726,6 +727,36 @@ export class CardFootballEngine {
       sourceCardName,
       bonus: preview.bonus,
       line: preview.line,
+    };
+  }
+
+  getDefenseCardGuidance(cardId: string) {
+    if (this.state.turnMode !== "PLAYER_DEFENSE" || !this.state.cpuPendingAttack) {
+      return null;
+    }
+
+    const defenseCard = getDefenseCard(cardId);
+    const attackingCard = getAttackCard(this.state.cpuPendingAttack.cardId);
+    const attackPlaystyle = this.state.teams.AWAY.playstyle;
+    const scoredHand = this.state.currentHand
+      .map((id) => getDefenseCard(id))
+      .map((card) => ({
+        id: card.id,
+        score: this.scoreDefenseFit(card, attackingCard, attackPlaystyle),
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    const bestScore = scoredHand[0]?.score ?? 0;
+    const score = this.scoreDefenseFit(defenseCard, attackingCard, attackPlaystyle);
+    const delta = bestScore - score;
+    const rating = delta <= 0 ? "BEST" : delta <= 2 ? "GOOD" : delta <= 4 ? "LIVE" : "RISK";
+    const focus = this.getDefenseFocusLabel(attackingCard);
+
+    return {
+      badge: rating === "RISK" ? "RISK" : `${rating} VS ${focus}`,
+      focus: this.getDefenseFocusSummary(defenseCard, attackingCard),
+      detail: this.getDefenseFocusDetail(defenseCard, attackingCard),
+      score,
     };
   }
 
@@ -1821,6 +1852,8 @@ export class CardFootballEngine {
       trait: shotTrait.line,
       trap: null,
     };
+    const visualMissBall = this.getShotMissVisualBall("HOME", movedShooter, keeper, clamp01(shot.aimQuality), clamp01(shot.powerQuality));
+    const visualGoalBall = this.getShotGoalVisualBall("HOME", movedShooter, keeper, clamp01(shot.aimQuality));
     this.clearComboState("HOME");
     this.state.stats.HOME.shots += 1;
     this.applyMovementPlan(plan);
@@ -1915,7 +1948,7 @@ export class CardFootballEngine {
       this.state.stats.HOME.goals += 1;
       this.state.score.HOME += 1;
       this.resetPressure();
-      return this.handleGoal(before, "HOME", shooter, attackingCard, defendingCard, shotInsights);
+      return this.handleGoal(before, "HOME", shooter, attackingCard, defendingCard, shotInsights, visualGoalBall);
     }
 
     if (onTarget) {
@@ -1995,6 +2028,7 @@ export class CardFootballEngine {
       goalScored: false,
       attackingCard: this.toCardView(attackingCard),
       defendingCard: this.toCardView(defendingCard),
+      visualBall: visualMissBall,
     });
   }
 
@@ -2045,6 +2079,8 @@ export class CardFootballEngine {
       trait: shotTrait.line,
       trap: null,
     };
+    const visualMissBall = this.getShotMissVisualBall("AWAY", movedShooter, keeper, 0.5, 0.65);
+    const visualGoalBall = this.getShotGoalVisualBall("AWAY", movedShooter, keeper, 0.5);
     this.clearComboState("AWAY");
     this.state.stats.AWAY.shots += 1;
     this.applyMovementPlan(plan);
@@ -2139,7 +2175,7 @@ export class CardFootballEngine {
       this.state.stats.AWAY.goals += 1;
       this.state.score.AWAY += 1;
       this.resetPressure();
-      return this.handleGoal(before, "AWAY", shooter, attackingCard, defendingCard, shotInsights);
+      return this.handleGoal(before, "AWAY", shooter, attackingCard, defendingCard, shotInsights, visualGoalBall);
     }
 
     if (onTarget) {
@@ -2219,6 +2255,7 @@ export class CardFootballEngine {
       goalScored: false,
       attackingCard: this.toCardView(attackingCard),
       defendingCard: this.toCardView(defendingCard),
+      visualBall: visualMissBall,
     });
   }
 
@@ -2228,7 +2265,8 @@ export class CardFootballEngine {
     shooter: TeamRosterPlayer,
     attackingCard: AttackCardDef,
     defendingCard: DefenseCardDef,
-    insights: { combo: string | null; trait: string | null; trap: string | null }
+    insights: { combo: string | null; trait: string | null; trap: string | null },
+    visualBall: BallState
   ) {
     const concedingTeam = oppositeTeam(scoringTeam);
     this.state.restart = null;
@@ -2252,13 +2290,15 @@ export class CardFootballEngine {
       goalScored: true,
       attackingCard: this.toCardView(attackingCard),
       defendingCard: this.toCardView(defendingCard),
+      visualBall,
     });
   }
 
   private buildResolution(
     before: Map<string, { x: number; y: number }>,
-    data: Omit<ActionResolutionView, "animations" | "ball" | "cpuPreviewCard" | "restart" | "insights"> & {
+    data: Omit<ActionResolutionView, "animations" | "ball" | "cpuPreviewCard" | "restart" | "insights" | "visualBall"> & {
       insights?: Partial<ActionResolutionView["insights"]>;
+      visualBall?: BallState | null;
     }
   ): ActionResolutionView {
     const { insights, ...rest } = data;
@@ -2281,6 +2321,7 @@ export class CardFootballEngine {
       },
       cpuPreviewCard: this.state.cpuPendingAttack ? this.toCardView(getAttackCard(this.state.cpuPendingAttack.cardId)) : null,
       ball: { ...this.state.ball },
+      visualBall: rest.visualBall ? { ...rest.visualBall } : null,
       restart: this.state.restart ? { ...this.state.restart } : null,
       animations,
     };
@@ -2457,6 +2498,67 @@ export class CardFootballEngine {
       default:
         return card.id === "PROTECT_MIDDLE" || card.id === "SWEEP_COVER" ? 5 : 0;
     }
+  }
+
+  private getDefenseFocusLabel(attackCard: AttackCardDef) {
+    if (attackCard.kind === "DRIBBLE") return "1V1";
+    if (attackCard.kind === "SHOT") return "SHOT";
+    return this.isLongBallAttack(attackCard) ? "RUN" : "PASS";
+  }
+
+  private getDefenseFocusSummary(card: DefenseCardDef, attackCard: AttackCardDef) {
+    if (attackCard.kind === "DRIBBLE") {
+      return `1v1 ${card.dribbleStop} | ${card.kind === "TACKLE" ? "duel" : "shape"}`;
+    }
+    if (attackCard.kind === "SHOT") {
+      return `block ${card.shotStop} | ${card.kind === "BLOCK" ? "box wall" : "late close"}`;
+    }
+    return this.isLongBallAttack(attackCard) ? `lane ${card.passStop} | run ${card.longBallStop}` : `lane ${card.passStop} | trap ${card.longBallStop}`;
+  }
+
+  private getDefenseFocusDetail(card: DefenseCardDef, attackCard: AttackCardDef) {
+    if (attackCard.kind === "DRIBBLE") {
+      return `${card.description} Best when you want to meet the carrier instead of retreating.`;
+    }
+    if (attackCard.kind === "SHOT") {
+      return `${card.description} The key value here is shot stop ${card.shotStop}.`;
+    }
+    if (this.isLongBallAttack(attackCard)) {
+      return `${card.description} Use it when the danger is the runner behind the first line.`;
+    }
+    return `${card.description} Use it to shrink the passing lane before the ball is released.`;
+  }
+
+  private isLongBallAttack(attackCard: AttackCardDef) {
+    return ["THROUGH_BALL", "SWITCH_PLAY", "CROSS", "OVERLAP_RUN"].includes(attackCard.id);
+  }
+
+  private getShotGoalVisualBall(teamId: TeamId, shooter: { x: number; y: number }, keeper: { x: number; y: number }, aimQuality: number): BallState {
+    const towardRight = this.getAttackDirection(teamId) === "RIGHT";
+    return {
+      holderId: "",
+      teamId,
+      x: towardRight ? 99.1 : 0.9,
+      y: round1(clamp(mix(shooter.y, keeper.y, 0.58) + (0.5 - aimQuality) * 8, 14, 50)),
+    };
+  }
+
+  private getShotMissVisualBall(
+    teamId: TeamId,
+    shooter: { x: number; y: number },
+    keeper: { x: number; y: number },
+    aimQuality: number,
+    powerQuality: number
+  ): BallState {
+    const towardRight = this.getAttackDirection(teamId) === "RIGHT";
+    const overhit = (powerQuality - 0.5) * 6;
+    const postBias = shooter.y <= 32 ? -1 : 1;
+    return {
+      holderId: "",
+      teamId,
+      x: round1(towardRight ? 102.5 + overhit : -2.5 - overhit),
+      y: round1(clamp(keeper.y + postBias * (6 + (0.55 - aimQuality) * 10), 8, 56)),
+    };
   }
 
   private getSupportBias(player: TeamRosterPlayer, cardId: string, ballHolder: TeamRosterPlayer, _ballX: number, ballY: number) {
