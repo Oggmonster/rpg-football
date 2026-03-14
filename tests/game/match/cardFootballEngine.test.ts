@@ -92,6 +92,88 @@ describe("CardFootballEngine", () => {
     expect(preview?.bonus).toBeGreaterThan(0);
   });
 
+  test("live state exposes a high-drama attack moment with a featured card", () => {
+    const engine = new CardFootballEngine({ rngSeed: 101, kickoffTeamFirstHalf: "HOME" }) as unknown as CardFootballEngine & {
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        currentHand: string[];
+        teams: { HOME: { lineup: { ST: { playerId: string; x: number; y: number } } } };
+      };
+    };
+
+    engine.state.teams.HOME.lineup.ST.x = 88;
+    engine.state.teams.HOME.lineup.ST.y = 31;
+    engine.state.ball.teamId = "HOME";
+    engine.state.ball.holderId = engine.state.teams.HOME.lineup.ST.playerId;
+    engine.state.ball.x = 88;
+    engine.state.ball.y = 31;
+    engine.state.currentHand = ["PLACED_SHOT", "SHORT_PASS", "BODY_FEINT"];
+
+    const state = engine.getState();
+
+    expect(state.drama?.id).toBe("BOX_CHAOS");
+    expect(state.heroMoment?.kind).toBe("ATTACK");
+    expect(state.heroMoment?.cardId).toBe("PLACED_SHOT");
+    expect(state.heroMoment?.bonus).toBeGreaterThan(0);
+  });
+
+  test("player defense exposes a trap-ready hero call when the CPU move is shown", () => {
+    const engine = new CardFootballEngine({ rngSeed: 102, kickoffTeamFirstHalf: "AWAY" }) as unknown as CardFootballEngine & {
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        currentHand: string[];
+        cpuPendingAttack: { hand: string[]; cardId: string } | null;
+        turnMode: "PLAYER_ATTACK" | "PLAYER_DEFENSE" | "HALFTIME" | "FULLTIME";
+        pressure: { HOME: number; AWAY: number };
+      };
+    };
+
+    engine.state.turnMode = "PLAYER_DEFENSE";
+    engine.state.currentHand = ["PRESS_TRAP", "DOUBLE_PRESS", "LOW_BLOCK"];
+    engine.state.cpuPendingAttack = {
+      hand: ["THROUGH_BALL", "POWER_SHOT", "SHORT_PASS"],
+      cardId: "THROUGH_BALL",
+    };
+    engine.state.pressure.AWAY = 10;
+
+    const state = engine.getState();
+
+    expect(state.drama?.id).toBe("TRAP_READY");
+    expect(state.heroMoment?.kind).toBe("DEFENSE");
+    expect(state.heroMoment?.bonus).toBeGreaterThan(0);
+    expect(["PRESS_TRAP", "DOUBLE_PRESS", "TRACK_RUNNER"]).toContain(state.heroMoment?.cardId);
+  });
+
+  test("playing the featured hero card carries the hero insight into the resolution", () => {
+    const engine = new CardFootballEngine({ rngSeed: 103, kickoffTeamFirstHalf: "HOME" }) as unknown as CardFootballEngine & {
+      state: {
+        ball: { holderId: string; teamId: "HOME" | "AWAY"; x: number; y: number };
+        currentHand: string[];
+        teams: { HOME: { lineup: { ST: { playerId: string; x: number; y: number } } } };
+      };
+    };
+
+    engine.state.teams.HOME.lineup.ST.x = 86;
+    engine.state.teams.HOME.lineup.ST.y = 32;
+    engine.state.ball.teamId = "HOME";
+    engine.state.ball.holderId = engine.state.teams.HOME.lineup.ST.playerId;
+    engine.state.ball.x = 86;
+    engine.state.ball.y = 32;
+    engine.state.currentHand = ["PLACED_SHOT", "SHORT_PASS", "BODY_FEINT"];
+
+    const state = engine.getState();
+    const result = engine.playAttackCard(state.heroMoment?.cardId ?? "PLACED_SHOT", {
+      type: "SHOT",
+      shot: {
+        aimQuality: 0.84,
+        powerQuality: 0.78,
+      },
+    });
+
+    expect(result.attackingCard?.id).toBe(state.heroMoment?.cardId);
+    expect(result.insights.hero).toBeTruthy();
+  });
+
   test("trait context rewards creative passers finding runners", () => {
     const engine = new CardFootballEngine({ rngSeed: 92 }) as unknown as {
       getPassTraitContext: (

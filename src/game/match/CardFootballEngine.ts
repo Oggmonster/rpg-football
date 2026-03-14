@@ -146,6 +146,28 @@ type ComboState = {
   chain: number;
 };
 
+export type DramaStateId = "SETTLING" | "COUNTER" | "FINAL_THIRD" | "BOX_CHAOS" | "LAST_GASP" | "TRAP_READY";
+
+export type MatchDramaView = {
+  id: DramaStateId;
+  label: string;
+  detail: string;
+  intensity: number;
+  teamId: TeamId;
+};
+
+export type HeroMomentView = {
+  kind: "ATTACK" | "DEFENSE";
+  teamId: TeamId;
+  playerId: string;
+  playerName: string;
+  cardId: string;
+  cardName: string;
+  label: string;
+  detail: string;
+  bonus: number;
+};
+
 type MatchState = {
   seed: number;
   phase: MatchPhase;
@@ -262,6 +284,8 @@ export type MatchStateView = {
     lastCardName: string;
     chain: number;
   } | null;
+  drama: MatchDramaView | null;
+  heroMoment: HeroMomentView | null;
   halftime: {
     canContinue: boolean;
     tactics: MatchTacticId[];
@@ -277,6 +301,8 @@ export type ActionResolutionView = {
     combo: string | null;
     trait: string | null;
     trap: string | null;
+    hero: string | null;
+    drama: string | null;
   };
   possessionAfter: TeamId;
   roundEnded: boolean;
@@ -658,6 +684,8 @@ export class CardFootballEngine {
 
   getState(): MatchStateView {
     const comboCardName = this.state.comboState ? this.getCard(this.state.comboState.lastCardId)?.name ?? this.state.comboState.lastCardId : null;
+    const drama = this.getDramaState();
+    const heroMoment = this.getHeroMoment(drama);
     return {
       phase: this.state.phase,
       half: this.state.half,
@@ -696,6 +724,8 @@ export class CardFootballEngine {
             chain: this.state.comboState.chain,
           }
         : null,
+      drama,
+      heroMoment,
       halftime:
         this.state.phase === "HALFTIME"
           ? {
@@ -728,6 +758,309 @@ export class CardFootballEngine {
       bonus: preview.bonus,
       line: preview.line,
     };
+  }
+
+  private getDramaState(): MatchDramaView | null {
+    if (this.state.phase !== "LIVE") {
+      return null;
+    }
+
+    const holder = this.findPlayer(this.state.ball.holderId);
+    const ballTeam = this.state.ball.teamId;
+    const distanceToGoal = holder ? this.getDistanceToGoal(holder.teamId, holder.x) : 50;
+    const roundsElapsed = this.state.attackRoundsThisHalf.HOME + this.state.attackRoundsThisHalf.AWAY;
+    const comboChain = this.state.comboState?.teamId === ballTeam ? this.state.comboState.chain : 0;
+    const pressure = this.state.pressure[ballTeam];
+    const scoreGap = Math.abs(this.state.score.HOME - this.state.score.AWAY);
+
+    if (this.state.turnMode === "PLAYER_DEFENSE" && this.state.cpuPendingAttack && (pressure >= 8 || comboChain >= 2 || distanceToGoal <= 28)) {
+      return {
+        id: "TRAP_READY",
+        label: "Ambush",
+        detail: "The move is telegraphed. One clean defensive read flips the whole half.",
+        intensity: 3,
+        teamId: "HOME",
+      };
+    }
+
+    if ((this.state.restart && (this.state.restart.type === "CORNER" || this.state.restart.type === "REBOUND")) || distanceToGoal <= 15) {
+      return {
+        id: "BOX_CHAOS",
+        label: "Box Chaos",
+        detail: "Bodies are collapsing into the area. Anything clean now can become a highlight.",
+        intensity: 4,
+        teamId: ballTeam,
+      };
+    }
+
+    if ((roundsElapsed >= 16 || this.state.attackRoundsThisHalf.HOME >= 8 || this.state.attackRoundsThisHalf.AWAY >= 8) && scoreGap <= 1) {
+      return {
+        id: "LAST_GASP",
+        label: "Last Gasp",
+        detail: "Every swing matters now. The match is short on time and long on consequences.",
+        intensity: 4,
+        teamId: ballTeam,
+      };
+    }
+
+    if (distanceToGoal <= 30 || pressure >= 11) {
+      return {
+        id: "FINAL_THIRD",
+        label: "Final Third",
+        detail: "The shape is bending close to goal. The next clean action should hurt somebody.",
+        intensity: 3,
+        teamId: ballTeam,
+      };
+    }
+
+    if (comboChain >= 2 || pressure >= 7) {
+      return {
+        id: "COUNTER",
+        label: "Break On",
+        detail: "The move has rhythm. Keep pushing before the defense can breathe again.",
+        intensity: 2,
+        teamId: ballTeam,
+      };
+    }
+
+    return {
+      id: "SETTLING",
+      label: "Build-Up",
+      detail: "Probe the shape and wait for a lane worth punishing.",
+      intensity: 1,
+      teamId: ballTeam,
+    };
+  }
+
+  private getHeroMoment(drama: MatchDramaView | null): HeroMomentView | null {
+    if (this.state.phase !== "LIVE") {
+      return null;
+    }
+    if (this.state.turnMode === "PLAYER_ATTACK") {
+      return this.getAttackHeroMoment("HOME", this.state.currentHand, drama);
+    }
+    if (this.state.turnMode === "PLAYER_DEFENSE") {
+      return this.getDefenseHeroMoment("HOME", this.state.currentHand, drama);
+    }
+    return null;
+  }
+
+  private getAttackHeroMoment(teamId: TeamId, hand: string[], drama: MatchDramaView | null): HeroMomentView | null {
+    const holder = this.findPlayer(this.state.ball.holderId);
+    if (!holder || holder.teamId !== teamId || hand.length === 0) {
+      return null;
+    }
+
+    const distanceTier = this.getDistanceTier(holder);
+    const cards = hand.map((cardId) => ATTACK_LOOKUP.get(cardId)).filter(Boolean) as AttackCardDef[];
+    let best:
+      | {
+          card: AttackCardDef;
+          bonus: number;
+          score: number;
+          label: string;
+          detail: string;
+        }
+      | null = null;
+
+    for (const card of cards) {
+      const combo = this.getComboContext(teamId, card.id).bonus;
+      const fit = this.getAttackHeroFit(holder, card, distanceTier);
+      const dramaBonus = this.getDramaAttackBonus(teamId, card, drama);
+      const score = fit + dramaBonus + Math.round(combo * 0.65);
+      if (!best || score > best.score) {
+        const bonus = clamp(Math.round(score / 1.6), 0, 14);
+        best = {
+          card,
+          bonus,
+          score,
+          label: card.kind === "SHOT" ? "GREEN LIGHT" : card.kind === "DRIBBLE" ? "TAKE HIM ON" : "THREAD IT",
+          detail: this.buildAttackHeroDetail(holder, card, drama),
+        };
+      }
+    }
+
+    if (!best || best.score < 7 || best.bonus <= 0) {
+      return null;
+    }
+
+    return {
+      kind: "ATTACK",
+      teamId,
+      playerId: holder.playerId,
+      playerName: holder.name,
+      cardId: best.card.id,
+      cardName: best.card.name,
+      label: best.label,
+      detail: best.detail,
+      bonus: best.bonus,
+    };
+  }
+
+  private getDefenseHeroMoment(teamId: TeamId, hand: string[], drama: MatchDramaView | null): HeroMomentView | null {
+    if (!this.state.cpuPendingAttack || hand.length === 0) {
+      return null;
+    }
+
+    const attackCard = getAttackCard(this.state.cpuPendingAttack.cardId);
+    const ballHolder = this.getBallHolder();
+    const defender = this.pickNearestDefender(ballHolder.x, ballHolder.y, teamId);
+    const cards = hand.map((cardId) => DEFENSE_LOOKUP.get(cardId)).filter(Boolean) as DefenseCardDef[];
+    let best:
+      | {
+          card: DefenseCardDef;
+          bonus: number;
+          score: number;
+          fit: number;
+          label: string;
+          detail: string;
+        }
+      | null = null;
+
+    for (const card of cards) {
+      const fit = this.getDefenseHeroFit(defender, card, attackCard);
+      const dramaBonus = this.getDramaDefenseBonus(teamId, card, attackCard, drama);
+      const score = this.scoreDefenseFit(card, attackCard, this.state.teams.AWAY.playstyle) + fit + dramaBonus;
+      if (!best || score > best.score) {
+        const bonus = clamp(Math.round((fit + dramaBonus) / 1.6), 0, 12);
+        best = {
+          card,
+          bonus,
+          score,
+          fit,
+          label: attackCard.kind === "SHOT" ? "LAST DITCH" : attackCard.kind === "DRIBBLE" ? "HIT THE DUEL" : "SPRING THE TRAP",
+          detail: `${defender.name} can lead ${card.name.toLowerCase()} and blow up the move before it breathes.`,
+        };
+      }
+    }
+
+    if (!best || best.bonus <= 0) {
+      return null;
+    }
+
+    return {
+      kind: "DEFENSE",
+      teamId,
+      playerId: defender.playerId,
+      playerName: defender.name,
+      cardId: best.card.id,
+      cardName: best.card.name,
+      label: best.label,
+      detail: best.detail,
+      bonus: best.bonus,
+    };
+  }
+
+  private getAttackHeroFit(holder: TeamRosterPlayer, card: AttackCardDef, distanceTier: DistanceTier) {
+    let fit = 0;
+
+    if (card.kind === "PASS" && this.playerMatches(holder, ["playmaker", "creator", "distributor", "quarterback", "link-up", "pocket playmaker"])) {
+      fit += 6;
+    }
+    if (card.id === "CROSS" && this.playerMatches(holder, ["crosser", "touchline runner", "overlap runner", "wide runner"])) {
+      fit += 7;
+    }
+    if ((card.id === "THROUGH_BALL" || card.id === "OVERLAP_RUN") && this.playerMatches(holder, ["creator", "playmaker", "quarterback", "engine"])) {
+      fit += 5;
+    }
+    if (card.kind === "DRIBBLE" && this.playerMatches(holder, ["press-resistant", "ball magnet", "inside cutter", "speedster", "engine", "touchline runner"])) {
+      fit += 7;
+    }
+    if (card.kind === "SHOT" && this.playerMatches(holder, ["poacher", "fox in the box", "first-time finisher", "target man", "shadow striker", "long shot threat"])) {
+      fit += distanceTier === "LONG" ? 4 : 8;
+    }
+    if (card.kind === "SHOT" && distanceTier === "CLOSE") {
+      fit += 5;
+    }
+    if (card.kind === "PASS" && distanceTier === "LONG") {
+      fit += 2;
+    }
+
+    return fit;
+  }
+
+  private getDefenseHeroFit(defender: TeamRosterPlayer, card: DefenseCardDef, attackCard: AttackCardDef) {
+    let fit = 0;
+
+    if (attackCard.kind === "PASS" && this.playerMatches(defender, ["reader", "line guardian", "anchor back", "pressing monster", "no-nonsense defender"])) {
+      fit += card.kind === "MAN_MARK" || card.kind === "BLOCK" ? 7 : 3;
+    }
+    if (attackCard.kind === "DRIBBLE" && this.playerMatches(defender, ["enforcer", "tackle machine", "pressing monster", "wall"])) {
+      fit += card.kind === "TACKLE" ? 8 : 3;
+    }
+    if (attackCard.kind === "SHOT" && this.playerMatches(defender, ["wall", "line guardian", "anchor back", "shot barrier"])) {
+      fit += card.kind === "BLOCK" ? 8 : 2;
+    }
+
+    return fit;
+  }
+
+  private buildAttackHeroDetail(holder: TeamRosterPlayer, card: AttackCardDef, drama: MatchDramaView | null) {
+    if (card.kind === "SHOT") {
+      return `${holder.name} has the picture. ${card.name} is the cleanest way to cash in this ${drama?.label.toLowerCase() ?? "moment"}.`;
+    }
+    if (card.kind === "DRIBBLE") {
+      return `${holder.name} has a defender isolated. ${card.name} should turn the moment into a duel.`;
+    }
+    return `${holder.name} can bend the shape right now. ${card.name} is the pass that keeps the fever rising.`;
+  }
+
+  private getAttackHeroBonus(teamId: TeamId, attackingCard: AttackCardDef, hand: string[]) {
+    const hero = this.getAttackHeroMoment(teamId, hand, this.getDramaState());
+    if (!hero || hero.cardId !== attackingCard.id) {
+      return { bonus: 0, line: null as string | null };
+    }
+    return { bonus: hero.bonus, line: hero.detail };
+  }
+
+  private getDefenseHeroBonus(teamId: TeamId, defendingCard: DefenseCardDef, attackingCard: AttackCardDef, hand: string[]) {
+    const hero = this.getDefenseHeroMoment(teamId, hand, this.getDramaState());
+    if (!hero || hero.cardId !== defendingCard.id) {
+      return { bonus: 0, line: null as string | null };
+    }
+    return {
+      bonus: hero.bonus,
+      line:
+        attackingCard.kind === "SHOT"
+          ? `${hero.playerName} reads the strike early and throws the whole body into the emergency block.`
+          : attackingCard.kind === "DRIBBLE"
+            ? `${hero.playerName} steps in at exactly the right instant and turns the duel violent.`
+            : `${hero.playerName} sees the pattern early and leads the trap from the front.`,
+    };
+  }
+
+  private getDramaAttackBonus(_teamId: TeamId, card: AttackCardDef, drama: MatchDramaView | null) {
+    if (!drama) {
+      return 0;
+    }
+    switch (drama.id) {
+      case "COUNTER":
+        return ["THROUGH_BALL", "OVERLAP_RUN", "BURST_RUN", "POWER_SHOT"].includes(card.id) ? 6 : 1;
+      case "FINAL_THIRD":
+        return card.kind === "SHOT" || card.id === "THREAD_PASS" || card.id === "CUT_INSIDE" ? 6 : 2;
+      case "BOX_CHAOS":
+        return card.kind === "SHOT" || card.id === "CROSS" ? 8 : 3;
+      case "LAST_GASP":
+        return card.kind === "SHOT" ? 7 : card.kind === "PASS" ? 3 : 4;
+      default:
+        return 0;
+    }
+  }
+
+  private getDramaDefenseBonus(_teamId: TeamId, card: DefenseCardDef, attackCard: AttackCardDef, drama: MatchDramaView | null) {
+    if (!drama) {
+      return 0;
+    }
+    if (drama.id === "TRAP_READY") {
+      return card.id === "PRESS_TRAP" || card.id === "DOUBLE_PRESS" || card.id === "TRACK_RUNNER" ? 7 : 3;
+    }
+    if (drama.id === "BOX_CHAOS" && attackCard.kind === "SHOT") {
+      return card.kind === "BLOCK" ? 7 : 2;
+    }
+    if (drama.id === "LAST_GASP") {
+      return card.kind === "TACKLE" || card.kind === "BLOCK" ? 5 : 2;
+    }
+    return 0;
   }
 
   getDefenseCardGuidance(cardId: string) {
@@ -1211,13 +1544,16 @@ export class CardFootballEngine {
     );
     const combo = this.getComboContext("HOME", attackingCard.id);
     const trait = this.getPassTraitContext(passer, target, attackingCard);
+    const hero = this.getAttackHeroBonus("HOME", attackingCard, this.state.currentHand);
+    const drama = this.getDramaState();
+    const dramaBonus = this.getDramaAttackBonus("HOME", attackingCard, drama);
     const previewChance = this.previewPassChance(attackingCard, passer, target, laneRisk, movedPasser, movedTarget);
     const passDistance = distance(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y);
     const trap = this.getPassTrapContext(defendingCard, attackingCard, pressure, target, passDistance);
     const defensePenalty = defendingCard.passStop + (distance(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y) > 22 ? defendingCard.longBallStop : 0);
     const tacticBonus = TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pass - TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pressing;
     const pressureBoost = this.state.pressure.HOME * 0.12;
-    const chance = clamp(Math.round(previewChance + tacticBonus + pressureBoost + combo.bonus + trait.bonus - defensePenalty - trap.penalty), 5, 95);
+    const chance = clamp(Math.round(previewChance + tacticBonus + pressureBoost + combo.bonus + trait.bonus + hero.bonus + dramaBonus - defensePenalty - trap.penalty), 5, 95);
     const success = this.rng.int(1, 100) <= chance;
 
     if (success) {
@@ -1234,12 +1570,14 @@ export class CardFootballEngine {
         summary: `${passer.name} finds ${target.name}.`,
         commentary: [
           `${passer.name} scans the pitch and slides it into ${target.name}.`,
-          combo.line ?? trait.line ?? `${target.name} checks toward the ball and takes it in stride.`,
+          hero.line ?? combo.line ?? trait.line ?? `${target.name} checks toward the ball and takes it in stride.`,
           `${this.labelForTeam("HOME")} keep the move alive.`,
         ],
         insights: {
           combo: combo.line,
           trait: trait.line,
+          hero: hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "HOME",
         roundEnded: false,
@@ -1294,6 +1632,8 @@ export class CardFootballEngine {
         ],
         insights: {
           trap: trap.line,
+          hero: hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "AWAY",
         roundEnded: true,
@@ -1382,13 +1722,22 @@ export class CardFootballEngine {
     );
     const combo = this.getComboContext("AWAY", attackingCard.id);
     const trait = this.getPassTraitContext(passer, target, attackingCard);
+    const hero = this.getAttackHeroBonus("AWAY", attackingCard, this.state.cpuPendingAttack?.hand ?? []);
+    const defenseHero = this.getDefenseHeroBonus("HOME", defendingCard, attackingCard, this.state.currentHand);
+    const drama = this.getDramaState();
+    const dramaAttackBonus = this.getDramaAttackBonus("AWAY", attackingCard, drama);
+    const dramaDefenseBonus = this.getDramaDefenseBonus("HOME", defendingCard, attackingCard, drama);
     const previewChance = this.previewPassChance(attackingCard, passer, target, laneRisk, movedPasser, movedTarget);
     const passDistance = distance(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y);
     const trap = this.getPassTrapContext(defendingCard, attackingCard, pressure, target, passDistance);
     const defensePenalty = defendingCard.passStop + (distance(movedPasser.x, movedPasser.y, movedTarget.x, movedTarget.y) > 22 ? defendingCard.longBallStop : 0);
     const tacticBonus = TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pass - TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pressing;
     const pressureBoost = this.state.pressure.AWAY * 0.12;
-    const chance = clamp(Math.round(previewChance + tacticBonus + pressureBoost + combo.bonus + trait.bonus - defensePenalty - trap.penalty), 5, 95);
+    const chance = clamp(
+      Math.round(previewChance + tacticBonus + pressureBoost + combo.bonus + trait.bonus + hero.bonus + dramaAttackBonus - defensePenalty - trap.penalty - defenseHero.bonus - dramaDefenseBonus),
+      5,
+      95
+    );
     const success = this.rng.int(1, 100) <= chance;
 
     if (success) {
@@ -1405,12 +1754,14 @@ export class CardFootballEngine {
         summary: `${passer.name} finds ${target.name}.`,
         commentary: [
           `The CPU spots the run and sends the pass into space.`,
-          combo.line ?? trait.line ?? `${target.name} gets there cleanly before the press can land.`,
+          hero.line ?? combo.line ?? trait.line ?? `${target.name} gets there cleanly before the press can land.`,
           `${this.labelForTeam("AWAY")} stay on the ball.`,
         ],
         insights: {
           combo: combo.line,
           trait: trait.line,
+          hero: hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "AWAY",
         roundEnded: false,
@@ -1465,6 +1816,8 @@ export class CardFootballEngine {
         ],
         insights: {
           trap: trap.line,
+          hero: defenseHero.line ?? hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "HOME",
         roundEnded: true,
@@ -1547,6 +1900,9 @@ export class CardFootballEngine {
     const closestPressure = pressure[0];
     const combo = this.getComboContext("HOME", attackingCard.id);
     const trait = this.getDribbleTraitContext(holder, attackingCard);
+    const hero = this.getAttackHeroBonus("HOME", attackingCard, this.state.currentHand);
+    const drama = this.getDramaState();
+    const dramaBonus = this.getDramaAttackBonus("HOME", attackingCard, drama);
     const trap = this.getDribbleTrapContext(defendingCard, pressure, holder);
     const progress = this.getAttackDirection("HOME") === "RIGHT" ? movedHolder.x - holder.x : holder.x - movedHolder.x;
     const chance =
@@ -1558,6 +1914,8 @@ export class CardFootballEngine {
             attackingCard.flair * 3 +
             combo.bonus +
             trait.bonus +
+            hero.bonus +
+            dramaBonus +
             progress * 1.6 +
             (TACTIC_MODIFIERS[this.state.teams.HOME.tactic].dribble - TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].pressing) * 2 -
             Math.max(0, attackingCard.requiredStars - holder.skillStars) * 8 -
@@ -1582,12 +1940,14 @@ export class CardFootballEngine {
         summary: `${holder.name} skips away from the challenge.`,
         commentary: [
           `${holder.name} squares the defender up and goes.`,
-          combo.line ?? trait.line ?? `A sharp touch opens a lane and the move keeps flowing.`,
+          hero.line ?? combo.line ?? trait.line ?? `A sharp touch opens a lane and the move keeps flowing.`,
           `${this.labelForTeam("HOME")} stay in command.`,
         ],
         insights: {
           combo: combo.line,
           trait: trait.line,
+          hero: hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "HOME",
         roundEnded: false,
@@ -1618,6 +1978,8 @@ export class CardFootballEngine {
         ],
         insights: {
           trap: trap.line,
+          hero: hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "AWAY",
         roundEnded: true,
@@ -1684,6 +2046,11 @@ export class CardFootballEngine {
     const closestPressure = pressure[0];
     const combo = this.getComboContext("AWAY", attackingCard.id);
     const trait = this.getDribbleTraitContext(holder, attackingCard);
+    const hero = this.getAttackHeroBonus("AWAY", attackingCard, this.state.cpuPendingAttack?.hand ?? []);
+    const defenseHero = this.getDefenseHeroBonus("HOME", defendingCard, attackingCard, this.state.currentHand);
+    const drama = this.getDramaState();
+    const dramaAttackBonus = this.getDramaAttackBonus("AWAY", attackingCard, drama);
+    const dramaDefenseBonus = this.getDramaDefenseBonus("HOME", defendingCard, attackingCard, drama);
     const trap = this.getDribbleTrapContext(defendingCard, pressure, holder);
     const progress = this.getAttackDirection("AWAY") === "RIGHT" ? movedHolder.x - holder.x : holder.x - movedHolder.x;
     const chance =
@@ -1695,6 +2062,10 @@ export class CardFootballEngine {
             attackingCard.flair * 3 +
             combo.bonus +
             trait.bonus +
+            hero.bonus +
+            dramaAttackBonus -
+            defenseHero.bonus -
+            dramaDefenseBonus +
             progress * 1.6 +
             (TACTIC_MODIFIERS[this.state.teams.AWAY.tactic].dribble - TACTIC_MODIFIERS[this.state.teams.HOME.tactic].pressing) * 2 -
             Math.max(0, attackingCard.requiredStars - holder.skillStars) * 8 -
@@ -1719,12 +2090,14 @@ export class CardFootballEngine {
         summary: `${holder.name} beats the first challenge.`,
         commentary: [
           `${holder.name} faces up, shifts the ball, and drives into the gap.`,
-          combo.line ?? trait.line ?? `The defensive line is scrambling back toward goal.`,
+          hero.line ?? combo.line ?? trait.line ?? `The defensive line is scrambling back toward goal.`,
           `${this.labelForTeam("AWAY")} keep the round going.`,
         ],
         insights: {
           combo: combo.line,
           trait: trait.line,
+          hero: hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "AWAY",
         roundEnded: false,
@@ -1755,6 +2128,8 @@ export class CardFootballEngine {
         ],
         insights: {
           trap: trap.line,
+          hero: defenseHero.line ?? hero.line,
+          drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
         },
         possessionAfter: "HOME",
         roundEnded: true,
@@ -1822,6 +2197,9 @@ export class CardFootballEngine {
     const distanceTier = this.getDistanceTier({ ...shooter, ...movedShooter });
     const combo = this.getComboContext("HOME", attackingCard.id);
     const shotTrait = this.getShotTraitContext(shooter, keeper, attackingCard, distanceTier);
+    const hero = this.getAttackHeroBonus("HOME", attackingCard, this.state.currentHand);
+    const drama = this.getDramaState();
+    const dramaBonus = this.getDramaAttackBonus("HOME", attackingCard, drama);
     const distancePenalty = distanceTier === "CLOSE" ? 0 : distanceTier === "MID" ? 8 : 18;
     const blockerPenalty = laneBlockers.reduce((sum, player) => sum + player.blocking / 34, 0);
     const cardPenalty = defendingCard.shotStop + laneBlockers.length * (defendingCard.kind === "BLOCK" ? 1.6 : 0.5);
@@ -1836,6 +2214,8 @@ export class CardFootballEngine {
       clamp01(shot.powerQuality) * 14 +
       combo.bonus +
       shotTrait.attackBonus +
+      hero.bonus * 2 +
+      dramaBonus * 1.5 +
       pressureBoost +
       tacticBonus * 2 -
       distancePenalty -
@@ -1851,6 +2231,8 @@ export class CardFootballEngine {
       combo: combo.line,
       trait: shotTrait.line,
       trap: null,
+      hero: hero.line,
+      drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
     };
     const visualMissBall = this.getShotMissVisualBall("HOME", movedShooter, keeper, clamp01(shot.aimQuality), clamp01(shot.powerQuality));
     const visualGoalBall = this.getShotGoalVisualBall("HOME", movedShooter, keeper, clamp01(shot.aimQuality));
@@ -1891,7 +2273,7 @@ export class CardFootballEngine {
           summary: `${blocker.name} blocks it behind.`,
         commentary: [
           `${shooter.name} lets it go through traffic and ${blocker.name} throws a body in the way.`,
-          combo.line ?? shotTrait.line ?? `The finish was set, but the lane never fully opens.`,
+          hero.line ?? combo.line ?? shotTrait.line ?? `The finish was set, but the lane never fully opens.`,
           `The deflection spins behind the goal. Corner to ${this.labelForTeam("HOME")}.`,
         ],
         insights: shotInsights,
@@ -1913,7 +2295,7 @@ export class CardFootballEngine {
           summary: `${blocker.name} blocks it, but the rebound stays alive.`,
         commentary: [
           `${blocker.name} gets in the way, but the block drops loose inside the area.`,
-          combo.line ?? shotTrait.line ?? `${shooter.name} had the picture, and the chance is still alive.`,
+          hero.line ?? combo.line ?? shotTrait.line ?? `${shooter.name} had the picture, and the chance is still alive.`,
           `${collector.name} is first to the rebound for ${this.labelForTeam("HOME")}.`,
         ],
         insights: shotInsights,
@@ -1931,7 +2313,7 @@ export class CardFootballEngine {
         summary: `${blocker.name} gets the block and the danger is cleared.`,
         commentary: [
           `${shooter.name} hits it and ${blocker.name} steps right into the lane.`,
-          combo.line ?? shotTrait.line ?? `The release is there, but the block kills the clean strike.`,
+          hero.line ?? combo.line ?? shotTrait.line ?? `The release is there, but the block kills the clean strike.`,
           `${collector.name} wins the second ball and clears the danger for ${this.labelForTeam("AWAY")}.`,
         ],
         insights: shotInsights,
@@ -1971,7 +2353,7 @@ export class CardFootballEngine {
             summary: `${keeper.name} cannot hold it.`,
             commentary: [
               `${shooter.name} gets the shot through and ${keeper.name} can only parry it away.`,
-              combo.line ?? shotTrait.line ?? `The first strike lands with enough venom to keep the area alive.`,
+              hero.line ?? combo.line ?? shotTrait.line ?? `The first strike lands with enough venom to keep the area alive.`,
               `${collector.name} reacts quickest to the rebound for ${this.labelForTeam("HOME")}.`,
             ],
             insights: shotInsights,
@@ -1995,7 +2377,7 @@ export class CardFootballEngine {
         summary: `${keeper.name} gets behind it.`,
         commentary: [
           `${shooter.name} gets the shot away through bodies in the box.`,
-          shotTrait.line ?? `${keeper.name} tracks it and beats it away to safety.`,
+          hero.line ?? shotTrait.line ?? `${keeper.name} tracks it and beats it away to safety.`,
           `The attack is over. ${this.labelForTeam("AWAY")} take the next round.`,
         ],
         insights: shotInsights,
@@ -2017,11 +2399,11 @@ export class CardFootballEngine {
     return this.buildResolution(before, {
       title: "Off Target",
       summary: `${shooter.name} cannot keep it down.`,
-      commentary: [
-        `${shooter.name} tries to whip it beyond the keeper.`,
-        combo.line ?? shotTrait.line ?? `Too much on it. The ball flies beyond the frame.`,
-        `Goal kick feeling, and ${this.labelForTeam("AWAY")} restart the next round.`,
-      ],
+        commentary: [
+          `${shooter.name} tries to whip it beyond the keeper.`,
+          hero.line ?? combo.line ?? shotTrait.line ?? `Too much on it. The ball flies beyond the frame.`,
+          `Goal kick feeling, and ${this.labelForTeam("AWAY")} restart the next round.`,
+        ],
       insights: shotInsights,
       possessionAfter: "AWAY",
       roundEnded: true,
@@ -2049,6 +2431,11 @@ export class CardFootballEngine {
     const distanceTier = this.getDistanceTier({ ...shooter, ...movedShooter });
     const combo = this.getComboContext("AWAY", attackingCard.id);
     const shotTrait = this.getShotTraitContext(shooter, keeper, attackingCard, distanceTier);
+    const hero = this.getAttackHeroBonus("AWAY", attackingCard, this.state.cpuPendingAttack?.hand ?? []);
+    const defenseHero = this.getDefenseHeroBonus("HOME", defendingCard, attackingCard, this.state.currentHand);
+    const drama = this.getDramaState();
+    const dramaAttackBonus = this.getDramaAttackBonus("AWAY", attackingCard, drama);
+    const dramaDefenseBonus = this.getDramaDefenseBonus("HOME", defendingCard, attackingCard, drama);
     const distancePenalty = distanceTier === "CLOSE" ? 0 : distanceTier === "MID" ? 8 : 18;
     const blockerPenalty = laneBlockers.reduce((sum, player) => sum + player.blocking / 34, 0);
     const cardPenalty = defendingCard.shotStop + laneBlockers.length * (defendingCard.kind === "BLOCK" ? 1.6 : 0.5);
@@ -2063,13 +2450,17 @@ export class CardFootballEngine {
       this.rng.next() * 12 +
       combo.bonus +
       shotTrait.attackBonus +
+      hero.bonus * 2 +
+      dramaAttackBonus * 1.5 +
       pressureBoost +
       tacticBonus * 2 -
       distancePenalty -
       blockerPenalty * 4 -
       cardPenalty * 3 -
       keeper.blocking * 0.38 -
-      shotTrait.keeperGoalPenalty;
+      shotTrait.keeperGoalPenalty -
+      defenseHero.bonus * 1.5 -
+      dramaDefenseBonus;
     const goalChance = clamp(Math.round(raw / 2.3), 4, 92);
     const onTargetChance = clamp(Math.round(goalChance + 12), 10, 97);
     const onTarget = this.rng.int(1, 100) <= onTargetChance;
@@ -2078,6 +2469,8 @@ export class CardFootballEngine {
       combo: combo.line,
       trait: shotTrait.line,
       trap: null,
+      hero: hero.line,
+      drama: drama?.intensity && drama.intensity >= 3 ? drama.label : null,
     };
     const visualMissBall = this.getShotMissVisualBall("AWAY", movedShooter, keeper, 0.5, 0.65);
     const visualGoalBall = this.getShotGoalVisualBall("AWAY", movedShooter, keeper, 0.5);
@@ -2118,7 +2511,7 @@ export class CardFootballEngine {
           summary: `${blocker.name} blocks it behind.`,
         commentary: [
           `The CPU strike and ${blocker.name} only manages to turn it behind.`,
-          combo.line ?? shotTrait.line ?? `The pattern play gets them clean enough for a dangerous effort.`,
+          hero.line ?? combo.line ?? shotTrait.line ?? `The pattern play gets them clean enough for a dangerous effort.`,
           `Corner to ${this.labelForTeam("AWAY")}. The pressure stays on.`,
         ],
         insights: shotInsights,
@@ -2140,7 +2533,7 @@ export class CardFootballEngine {
           summary: `${blocker.name} blocks it, but the rebound stays alive.`,
         commentary: [
           `${blocker.name} gets a piece of it, but not enough to clear danger.`,
-          combo.line ?? shotTrait.line ?? `The CPU hit it in stride and keep the box alive.`,
+          hero.line ?? combo.line ?? shotTrait.line ?? `The CPU hit it in stride and keep the box alive.`,
           `${collector.name} is first to the rebound and the attack continues.`,
         ],
         insights: shotInsights,
@@ -2158,7 +2551,7 @@ export class CardFootballEngine {
         summary: `${blocker.name} blocks it and your side clear.`,
         commentary: [
           `The CPU get the shot off, but ${blocker.name} stands up to the strike.`,
-          combo.line ?? shotTrait.line ?? `The move is there, but the shot never gets clean daylight.`,
+          defenseHero.line ?? hero.line ?? combo.line ?? shotTrait.line ?? `The move is there, but the shot never gets clean daylight.`,
           `${collector.name} gathers the second ball and takes the danger out of the area.`,
         ],
         insights: shotInsights,
@@ -2198,7 +2591,7 @@ export class CardFootballEngine {
             summary: `${keeper.name} spills it into danger.`,
             commentary: [
               `The CPU force the save and ${keeper.name} cannot hold the shot.`,
-              combo.line ?? shotTrait.line ?? `The sequence keeps the goalkeeper under real stress.`,
+              hero.line ?? combo.line ?? shotTrait.line ?? `The sequence keeps the goalkeeper under real stress.`,
               `${collector.name} pounces on the rebound and the attack is still alive.`,
             ],
             insights: shotInsights,
@@ -2265,7 +2658,7 @@ export class CardFootballEngine {
     shooter: TeamRosterPlayer,
     attackingCard: AttackCardDef,
     defendingCard: DefenseCardDef,
-    insights: { combo: string | null; trait: string | null; trap: string | null },
+    insights: ActionResolutionView["insights"],
     visualBall: BallState
   ) {
     const concedingTeam = oppositeTeam(scoringTeam);
@@ -2318,6 +2711,8 @@ export class CardFootballEngine {
         combo: insights?.combo ?? null,
         trait: insights?.trait ?? null,
         trap: insights?.trap ?? null,
+        hero: insights?.hero ?? null,
+        drama: insights?.drama ?? null,
       },
       cpuPreviewCard: this.state.cpuPendingAttack ? this.toCardView(getAttackCard(this.state.cpuPendingAttack.cardId)) : null,
       ball: { ...this.state.ball },
@@ -3081,11 +3476,14 @@ export class CardFootballEngine {
   }
 
   private getDistanceTier(player: TeamRosterPlayer): DistanceTier {
-    const attackDirection = this.getAttackDirection(player.teamId);
-    const distanceToGoal = attackDirection === "RIGHT" ? 100 - player.x : player.x;
+    const distanceToGoal = this.getDistanceToGoal(player.teamId, player.x);
     if (distanceToGoal <= 16) return "CLOSE";
     if (distanceToGoal <= 31) return "MID";
     return "LONG";
+  }
+
+  private getDistanceToGoal(teamId: TeamId, x: number) {
+    return this.getAttackDirection(teamId) === "RIGHT" ? 100 - x : x;
   }
 
   private getAttackDirection(teamId: TeamId): SideId {
